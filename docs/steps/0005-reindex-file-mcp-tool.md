@@ -86,9 +86,9 @@ The codebase indexer has scaffolded MCP tools and foundational modules (hashing,
 14. The orchestration function must normalize `file_path` before any other work:
     - If `file_path` is absolute: `Path(file_path).resolve()`.
     - If `file_path` is relative: `(Path(repo_path).resolve() / file_path).resolve()`.
-    - Compute `relative_path = resolved_file.relative_to(resolved_repo).as_posix()`. If this raises `ValueError`, the path is outside the repository — raise `ValueError("file_path resolves outside repository")`.
+    - Compute `relative_path = resolved_file.relative_to(resolved_repo).as_posix()`. If this raises `ValueError`, the path is outside the repository — raise a `ValueError` that includes both resolved paths. Reject `relative_path == "."` because a repository root is not an indexable file path.
     - This normalization must work for non-existent files (deleted file case). `Path.resolve()` with `strict=False` (default) handles this.
-    - This can be a private helper function in the orchestration module or inline in the orchestration function.
+    - Implement this as `path_utils.resolve_repo_file_path(repo_path, file_path) -> tuple[Path, Path, str]` so `reindex_file` and future single-file MCP tools share one containment rule. The tuple contains the resolved repository path, resolved file path, and POSIX relative path.
 
 ### R4 — Orchestration function
 

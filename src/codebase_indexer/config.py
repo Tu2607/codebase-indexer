@@ -50,6 +50,7 @@ INDEX_FILENAMES = frozenset(
 SKIP_DIRECTORIES = frozenset(
     {
         ".git",
+        ".codebase-index",
         ".venv",
         "venv",
         "__pycache__",

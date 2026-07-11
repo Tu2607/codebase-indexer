@@ -1,7 +1,40 @@
 import pytest
 
 import codebase_indexer.path_utils as path_utils
-from codebase_indexer.path_utils import resolve_repo_file_path
+from codebase_indexer.path_utils import resolve_repo_file_path, validate_repo_path
+
+
+def test_validate_repo_path_resolves_and_strips_string_path(tmp_path):
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+
+    assert validate_repo_path(f" {repo_path} ") == repo_path.resolve()
+
+
+def test_validate_repo_path_accepts_path_object(tmp_path):
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+
+    assert validate_repo_path(repo_path) == repo_path.resolve()
+
+
+@pytest.mark.parametrize("repo_path", [None, "", " "])
+def test_validate_repo_path_rejects_empty_path(repo_path):
+    with pytest.raises(ValueError, match="repo_path is required"):
+        validate_repo_path(repo_path)
+
+
+def test_validate_repo_path_rejects_missing_path(tmp_path):
+    with pytest.raises(ValueError, match="existing directory"):
+        validate_repo_path(tmp_path / "missing")
+
+
+def test_validate_repo_path_rejects_file_path(tmp_path):
+    repo_path = tmp_path / "not-a-repo"
+    repo_path.write_text("content\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="existing directory"):
+        validate_repo_path(repo_path)
 
 
 def test_resolve_repo_file_path_resolves_relative_path_against_repo(tmp_path):
@@ -189,4 +222,4 @@ def test_resolve_repo_file_path_rejects_repository_root(tmp_path, file_path):
 
 
 def test_path_utils_public_surface():
-    assert path_utils.__all__ == ["resolve_repo_file_path"]
+    assert path_utils.__all__ == ["resolve_repo_file_path", "validate_repo_path"]

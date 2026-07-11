@@ -4,6 +4,9 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
 from .config import SERVER_NAME
+from .index_store import IndexNotInitializedError, IndexStore
+from .path_utils import validate_repo_path
+from .reindexer import reindex_single_file
 
 mcp = FastMCP(SERVER_NAME)
 
@@ -25,11 +28,33 @@ def index_repo(repo_path: str, force: bool = False) -> dict[str, object]:
 @mcp.tool(
     description=(
         "Re-index one file after it has been edited, created, or overwritten. "
-        "Agents should call this after editing an indexed file."
+        "Call this after editing any indexed file. If the file was deleted, its "
+        "chunks are removed from the index. Requires an existing index created "
+        "by index_repo."
     )
 )
-def reindex_file(file_path: str) -> dict[str, object]:
-    _raise_not_implemented("reindex_file")
+def reindex_file(repo_path: str, file_path: str) -> dict[str, object]:
+    try:
+        resolved_repo_path = validate_repo_path(repo_path)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+
+    cleaned_file_path = file_path.strip() if file_path else ""
+    if not cleaned_file_path:
+        raise ToolError("file_path is required.")
+
+    try:
+        store = IndexStore.open_existing(resolved_repo_path)
+    # Keep the specific MCP-facing error visible even though it subclasses ValueError.
+    except IndexNotInitializedError as exc:
+        raise ToolError(str(exc)) from exc
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+
+    try:
+        return reindex_single_file(store, cleaned_file_path, store.repo_path)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
 
 
 @mcp.tool(
@@ -38,7 +63,7 @@ def reindex_file(file_path: str) -> dict[str, object]:
         "renaming an indexed file."
     )
 )
-def delete_file_from_index(file_path: str) -> dict[str, object]:
+def delete_file_from_index(repo_path: str, file_path: str) -> dict[str, object]:
     _raise_not_implemented("delete_file_from_index")
 
 
@@ -51,6 +76,7 @@ def delete_file_from_index(file_path: str) -> dict[str, object]:
     )
 )
 def search_repo_context(
+    repo_path: str,
     query: str,
     max_results: int = 5,
     include_stale: bool = False,

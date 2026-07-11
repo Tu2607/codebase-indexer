@@ -167,16 +167,14 @@ The codebase indexer has scaffolded MCP tools and foundational modules (hashing,
 20. Change the `reindex_file` MCP tool signature to `reindex_file(repo_path: str, file_path: str) -> dict[str, object]`.
 
 21. Implementation in `server.py`:
-    a. Validate `repo_path` is an existing directory.
-    b. Check `IndexStore.is_initialized(repo_path)` — if `False`, raise `ToolError` with a message telling the agent to run `index_repo` first.
-    c. Open `IndexStore.open_existing(repo_path)`.
-    d. Call `reindex_single_file(store, file_path, store.repo_path)`.
-    e. Return the result dict.
-    f. Catch `ValueError` from path resolution (outside-repo) and raise `ToolError`.
-    g. Catch `IndexNotInitializedError` and raise `ToolError`.
+    a. Validate `repo_path` through `path_utils.validate_repo_path`; convert its `ValueError` to `ToolError` at the MCP boundary.
+    b. Open `IndexStore.open_existing(repo_path)`. This performs the side-effect-free existing-index check and raises `IndexNotInitializedError` when `index_repo` has not initialized the repository.
+    c. Call `reindex_single_file(store, file_path, store.repo_path)`.
+    d. Return the result dict.
+    e. Catch `IndexNotInitializedError` and other `ValueError` instances from repository/path validation, and raise `ToolError`.
 
 22. Update the MCP tool description to:
-    > "Re-index one file after it has been edited, created, or overwritten. Call this after editing any indexed file. If the file was deleted, its chunks are removed from the index. Requires an existing index created by index_repo. Pass repo_path explicitly."
+    > "Re-index one file after it has been edited, created, or overwritten. Call this after editing any indexed file. If the file was deleted, its chunks are removed from the index. Requires an existing index created by index_repo."
 
 23. Update the remaining scaffolded tool signatures to accept `repo_path` where specified by AGENTS.md (change parameter lists only — implementations remain `_raise_not_implemented`). Specifically:
     - `reindex_file(repo_path: str, file_path: str)` — implemented.

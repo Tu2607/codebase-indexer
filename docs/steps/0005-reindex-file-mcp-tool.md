@@ -129,6 +129,8 @@ The codebase indexer has scaffolded MCP tools and foundational modules (hashing,
 }
 ```
 
+`chunks_added` counts chunk IDs that were not already present for the file.
+
 **`deleted`** — file does not exist at the resolved path:
 ```python
 {

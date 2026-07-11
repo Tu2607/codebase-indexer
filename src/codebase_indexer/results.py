@@ -1,20 +1,52 @@
-"""Plain dictionary result contracts for file reindexing."""
+"""Plain dictionary result contracts for indexing and file reindexing."""
 
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 __all__ = [
     "DeletedResult",
     "HashFailedResult",
+    "InitializedResult",
+    "IndexRepoResult",
+    "PartialFailureDetail",
+    "PartialFailureResult",
     "RemovedUnindexableResult",
     "ReindexedResult",
     "ReindexResult",
     "deleted_result",
     "hash_failed_result",
+    "initialized_result",
+    "partial_failure_result",
     "removed_unindexable_result",
     "reindexed_result",
 ]
+
+
+class InitializedResult(TypedDict):
+    status: Literal["initialized"]
+    repo_path: str
+    index_path: str
+    created: bool
+    files_indexed: NotRequired[int]
+    chunks_indexed: NotRequired[int]
+    files_skipped: NotRequired[int]
+
+
+class PartialFailureDetail(TypedDict):
+    relative_path: str
+    reason: str
+
+
+class PartialFailureResult(TypedDict):
+    status: Literal["partial_failure"]
+    repo_path: str
+    index_path: str
+    files_indexed: int
+    chunks_indexed: int
+    files_skipped: int
+    files_failed: int
+    failures: list[PartialFailureDetail]
 
 
 class ReindexedResult(TypedDict):
@@ -51,6 +83,51 @@ ReindexResult = (
     | RemovedUnindexableResult
     | HashFailedResult
 )
+IndexRepoResult = InitializedResult
+
+
+def initialized_result(
+    repo_path: str,
+    index_path: str,
+    *,
+    created: bool,
+    files_indexed: int = 0,
+    chunks_indexed: int = 0,
+    files_skipped: int = 0,
+) -> InitializedResult:
+    result: InitializedResult = {
+        "status": "initialized",
+        "repo_path": repo_path,
+        "index_path": index_path,
+        "created": created,
+    }
+    if created:
+        result.update(
+            files_indexed=files_indexed,
+            chunks_indexed=chunks_indexed,
+            files_skipped=files_skipped,
+        )
+    return result
+
+
+def partial_failure_result(
+    repo_path: str,
+    index_path: str,
+    files_indexed: int,
+    chunks_indexed: int,
+    files_skipped: int,
+    failures: list[PartialFailureDetail],
+) -> PartialFailureResult:
+    return {
+        "status": "partial_failure",
+        "repo_path": repo_path,
+        "index_path": index_path,
+        "files_indexed": files_indexed,
+        "chunks_indexed": chunks_indexed,
+        "files_skipped": files_skipped,
+        "files_failed": len(failures),
+        "failures": failures,
+    }
 
 
 def reindexed_result(

@@ -2,6 +2,8 @@ import codebase_indexer.results as results
 from codebase_indexer.results import (
     deleted_result,
     hash_failed_result,
+    initialized_result,
+    partial_failure_result,
     removed_unindexable_result,
     reindexed_result,
 )
@@ -55,15 +57,89 @@ def test_hash_failed_result_returns_retryable_plain_dict():
     }
 
 
+def test_initialized_result_with_created_true_includes_walk_counts():
+    result = initialized_result(
+        "/repo",
+        "/repo/.codebase-index",
+        created=True,
+        files_indexed=4,
+        chunks_indexed=12,
+        files_skipped=2,
+    )
+
+    assert type(result) is dict
+    assert result == {
+        "status": "initialized",
+        "repo_path": "/repo",
+        "index_path": "/repo/.codebase-index",
+        "created": True,
+        "files_indexed": 4,
+        "chunks_indexed": 12,
+        "files_skipped": 2,
+    }
+
+
+def test_initialized_result_with_created_false_omits_walk_counts():
+    result = initialized_result(
+        "/repo",
+        "/repo/.codebase-index",
+        created=False,
+        files_indexed=4,
+        chunks_indexed=12,
+        files_skipped=2,
+    )
+
+    assert result == {
+        "status": "initialized",
+        "repo_path": "/repo",
+        "index_path": "/repo/.codebase-index",
+        "created": False,
+    }
+
+
+def test_partial_failure_result_returns_plain_dict():
+    failures = [
+        {"relative_path": "src/broken.py", "reason": "hash failed"},
+        {"relative_path": "src/locked.py", "reason": "permission denied"},
+    ]
+
+    result = partial_failure_result(
+        "/repo",
+        "/repo/.codebase-index",
+        files_indexed=3,
+        chunks_indexed=8,
+        files_skipped=1,
+        failures=failures,
+    )
+
+    assert type(result) is dict
+    assert result == {
+        "status": "partial_failure",
+        "repo_path": "/repo",
+        "index_path": "/repo/.codebase-index",
+        "files_indexed": 3,
+        "chunks_indexed": 8,
+        "files_skipped": 1,
+        "files_failed": 2,
+        "failures": failures,
+    }
+
+
 def test_results_public_surface():
     assert results.__all__ == [
         "DeletedResult",
         "HashFailedResult",
+        "InitializedResult",
+        "IndexRepoResult",
+        "PartialFailureDetail",
+        "PartialFailureResult",
         "RemovedUnindexableResult",
         "ReindexedResult",
         "ReindexResult",
         "deleted_result",
         "hash_failed_result",
+        "initialized_result",
+        "partial_failure_result",
         "removed_unindexable_result",
         "reindexed_result",
     ]
@@ -75,6 +151,8 @@ def test_result_statuses_are_unique_discriminators():
         deleted_result("module.py", 0)["status"],
         removed_unindexable_result("module.py", "unsupported", 0)["status"],
         hash_failed_result("module.py")["status"],
+        initialized_result("/repo", "/index", created=False)["status"],
+        partial_failure_result("/repo", "/index", 0, 0, 0, [])["status"],
     }
 
     assert results_by_status == {
@@ -82,6 +160,8 @@ def test_result_statuses_are_unique_discriminators():
         "deleted",
         "removed_unindexable",
         "hash_failed",
+        "initialized",
+        "partial_failure",
     }
 
 

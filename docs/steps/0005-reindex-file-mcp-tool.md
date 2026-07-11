@@ -160,7 +160,7 @@ The codebase indexer has scaffolded MCP tools and foundational modules (hashing,
 }
 ```
 
-19. Results are plain `dict[str, object]`. No dataclass or enum wrapper in this step.
+19. Results remain plain dictionaries at runtime. Define their four shapes as `TypedDict` contracts and construct them through small builder functions in `results.py`; do not introduce dataclass or enum wrappers.
 
 ### R6 — MCP tool in `server.py`
 

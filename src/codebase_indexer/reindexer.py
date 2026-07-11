@@ -9,6 +9,14 @@ from .file_finder import should_index_file
 from .hashing import FileChangedDuringHashingError, hash_file
 from .index_store import IndexStore
 from .path_utils import resolve_repo_file_path
+from .results import (
+    DeletedResult,
+    ReindexResult,
+    deleted_result,
+    hash_failed_result,
+    removed_unindexable_result,
+    reindexed_result,
+)
 
 __all__ = ["reindex_single_file"]
 
@@ -17,7 +25,7 @@ def reindex_single_file(
     store: IndexStore,
     file_path: str,
     repo_path: str | os.PathLike[str],
-) -> dict[str, object]:
+) -> ReindexResult:
     """Reindex one file, preserving old chunks until replacement succeeds.
 
     Chunk replacement is not atomic: a deletion failure after an upsert can leave
@@ -40,12 +48,11 @@ def reindex_single_file(
         )
         if not is_indexable:
             chunks_removed = store.delete_chunks_for_file(relative_path)
-            return {
-                "status": "removed_unindexable",
-                "relative_path": relative_path,
-                "reason": reason or "not indexable",
-                "chunks_removed": chunks_removed,
-            }
+            return removed_unindexable_result(
+                relative_path,
+                reason or "not indexable",
+                chunks_removed,
+            )
 
         file_hash = hash_file(resolved_file_path)
         chunks = chunk_by_lines(
@@ -56,12 +63,7 @@ def reindex_single_file(
     except FileNotFoundError:
         return _deleted_result(store, relative_path)
     except FileChangedDuringHashingError:
-        return {
-            "status": "hash_failed",
-            "relative_path": relative_path,
-            "retryable": True,
-            "message": "File changed during hashing; retry after the write completes",
-        }
+        return hash_failed_result(relative_path)
 
     old_ids = store.get_chunk_ids_for_file(relative_path)
     store.upsert_chunks(chunks)
@@ -71,19 +73,14 @@ def reindex_single_file(
     stale_ids = [chunk_id for chunk_id in old_ids if chunk_id not in new_ids]
     store.delete_chunks_by_ids(stale_ids)
 
-    return {
-        "status": "reindexed",
-        "relative_path": relative_path,
-        "file_hash": file_hash,
-        "chunks_added": chunks_added,
-        "chunks_removed": len(stale_ids),
-    }
+    return reindexed_result(
+        relative_path,
+        file_hash,
+        chunks_added,
+        len(stale_ids),
+    )
 
 
-def _deleted_result(store: IndexStore, relative_path: str) -> dict[str, object]:
+def _deleted_result(store: IndexStore, relative_path: str) -> DeletedResult:
     chunks_removed = store.delete_chunks_for_file(relative_path)
-    return {
-        "status": "deleted",
-        "relative_path": relative_path,
-        "chunks_removed": chunks_removed,
-    }
+    return deleted_result(relative_path, chunks_removed)

@@ -6,7 +6,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 import codebase_indexer.server as server
-from codebase_indexer.index_store import IndexNotInitializedError
+from codebase_indexer.index_store import IndexCorruptedError, IndexNotInitializedError
 
 
 def _patch_open_store(monkeypatch, store):
@@ -47,6 +47,20 @@ def test_reindex_file_converts_index_initialization_errors_to_tool_error(
     monkeypatch.setattr(server.IndexStore, "open_existing", open_existing)
 
     with pytest.raises(ToolError, match=error_message):
+        server.reindex_file(str(tmp_path), "module.py")
+
+    open_existing.assert_called_once_with(tmp_path.resolve())
+
+
+def test_reindex_file_converts_corrupted_index_error_to_tool_error(
+    monkeypatch,
+    tmp_path,
+):
+    error = IndexCorruptedError("run rebuild_index")
+    open_existing = Mock(side_effect=error)
+    monkeypatch.setattr(server.IndexStore, "open_existing", open_existing)
+
+    with pytest.raises(ToolError, match="rebuild_index"):
         server.reindex_file(str(tmp_path), "module.py")
 
     open_existing.assert_called_once_with(tmp_path.resolve())

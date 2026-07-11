@@ -4,7 +4,7 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
 from .config import SERVER_NAME
-from .index_store import IndexNotInitializedError, IndexStore
+from .index_store import IndexCorruptedError, IndexNotInitializedError, IndexStore
 from .path_utils import validate_repo_path
 from .reindexer import reindex_single_file
 
@@ -47,6 +47,8 @@ def reindex_file(repo_path: str, file_path: str) -> dict[str, object]:
         store = IndexStore.open_existing(resolved_repo_path)
     # Keep the specific MCP-facing error visible even though it subclasses ValueError.
     except IndexNotInitializedError as exc:
+        raise ToolError(str(exc)) from exc
+    except IndexCorruptedError as exc:
         raise ToolError(str(exc)) from exc
     except ValueError as exc:
         raise ToolError(str(exc)) from exc

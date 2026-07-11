@@ -3,19 +3,24 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from pathlib import Path
 
 import chromadb
 from chromadb.api.models.Collection import Collection
 from chromadb.api.types import Documents, EmbeddingFunction
-from chromadb.errors import NotFoundError
+from chromadb.errors import InternalError, NotFoundError
 
 from .chunker import TextChunk
 from .config import DEFAULT_COLLECTION_NAME, DEFAULT_INDEX_DIR_NAME
 
-__all__ = ["IndexNotInitializedError", "IndexStore"]
+__all__ = ["IndexCorruptedError", "IndexNotInitializedError", "IndexStore"]
 
 _CHROMA_DATABASE_FILENAME = "chroma.sqlite3"
+
+
+class IndexCorruptedError(ValueError):
+    """Raised when an existing repository index cannot be opened."""
 
 
 class IndexNotInitializedError(ValueError):
@@ -60,7 +65,14 @@ class IndexStore:
                 f"{resolved_repo_path}"
             )
 
-        client = chromadb.PersistentClient(path=str(index_dir))
+        try:
+            client = chromadb.PersistentClient(path=str(index_dir))
+        except (InternalError, sqlite3.DatabaseError) as exc:
+            raise IndexCorruptedError(
+                f"Index database exists but cannot be opened ({exc}); remove .codebase-index "
+                "and run index_repo until rebuild_index is available: "
+                f"{resolved_repo_path}"
+            ) from exc
 
         try:
             if embedding_function is None:
@@ -71,8 +83,9 @@ class IndexStore:
                     embedding_function=embedding_function,
                 )
         except NotFoundError as exc:
-            raise IndexNotInitializedError(
-                f"Repository index collection is not initialized; run index_repo first: "
+            raise IndexCorruptedError(
+                f"Index database exists but collection is missing ({exc}); remove .codebase-index "
+                "and run index_repo until rebuild_index is available: "
                 f"{resolved_repo_path}"
             ) from exc
 

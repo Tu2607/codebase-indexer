@@ -1,8 +1,9 @@
+import sqlite3
 from unittest.mock import Mock
 
 import chromadb
 import pytest
-from chromadb.errors import NotFoundError
+from chromadb.errors import InternalError, NotFoundError
 
 from codebase_indexer.chunker import TextChunk
 from codebase_indexer.config import (
@@ -10,7 +11,11 @@ from codebase_indexer.config import (
     DEFAULT_INDEX_DIR_NAME,
     SKIP_DIRECTORIES,
 )
-from codebase_indexer.index_store import IndexNotInitializedError, IndexStore
+from codebase_indexer.index_store import (
+    IndexCorruptedError,
+    IndexNotInitializedError,
+    IndexStore,
+)
 
 EMBEDDING_DIMENSIONS = 384
 
@@ -156,10 +161,73 @@ def test_open_existing_wraps_chroma_missing_collection_error(tmp_path):
 
     assert IndexStore.is_initialized(tmp_path)
 
-    with pytest.raises(IndexNotInitializedError, match="index_repo") as exc_info:
+    with pytest.raises(IndexCorruptedError, match="rebuild_index") as exc_info:
         IndexStore.open_existing(tmp_path)
 
     assert isinstance(exc_info.value.__cause__, NotFoundError)
+
+
+@pytest.mark.parametrize("error_type", [InternalError, sqlite3.DatabaseError])
+def test_open_existing_wraps_database_open_error(tmp_path, monkeypatch, error_type):
+    index_dir = tmp_path / DEFAULT_INDEX_DIR_NAME
+    index_dir.mkdir()
+    (index_dir / "chroma.sqlite3").write_bytes(b"corrupt")
+    open_error = error_type("database is corrupt")
+
+    def raise_open_error(*, path):
+        raise open_error
+
+    monkeypatch.setattr(chromadb, "PersistentClient", raise_open_error)
+
+    with pytest.raises(IndexCorruptedError, match="rebuild_index") as exc_info:
+        IndexStore.open_existing(tmp_path)
+
+    assert exc_info.value.__cause__ is open_error
+
+
+def test_open_existing_wraps_real_corrupt_chroma_database(tmp_path):
+    index_dir = tmp_path / DEFAULT_INDEX_DIR_NAME
+    index_dir.mkdir()
+    (index_dir / "chroma.sqlite3").write_bytes(b"corrupt")
+
+    with pytest.raises(IndexCorruptedError, match="file is not a database") as exc_info:
+        IndexStore.open_existing(tmp_path)
+
+    assert isinstance(exc_info.value.__cause__, InternalError)
+
+
+def test_open_existing_does_not_wrap_filesystem_open_error(tmp_path, monkeypatch):
+    index_dir = tmp_path / DEFAULT_INDEX_DIR_NAME
+    index_dir.mkdir()
+    (index_dir / "chroma.sqlite3").write_bytes(b"database")
+    open_error = OSError("permission denied")
+
+    def raise_open_error(*, path):
+        raise open_error
+
+    monkeypatch.setattr(chromadb, "PersistentClient", raise_open_error)
+
+    with pytest.raises(OSError) as exc_info:
+        IndexStore.open_existing(tmp_path)
+
+    assert exc_info.value is open_error
+
+
+def test_open_existing_does_not_wrap_runtime_open_error(tmp_path, monkeypatch):
+    index_dir = tmp_path / DEFAULT_INDEX_DIR_NAME
+    index_dir.mkdir()
+    (index_dir / "chroma.sqlite3").write_bytes(b"database")
+    open_error = RuntimeError("dependency mismatch")
+
+    def raise_open_error(*, path):
+        raise open_error
+
+    monkeypatch.setattr(chromadb, "PersistentClient", raise_open_error)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        IndexStore.open_existing(tmp_path)
+
+    assert exc_info.value is open_error
 
 
 def test_open_existing_reopens_collection(tmp_path):
@@ -322,4 +390,8 @@ def test_delete_chunks_for_file_returns_zero_for_unknown_path(tmp_path):
 def test_index_store_public_surface():
     import codebase_indexer.index_store as index_store
 
-    assert index_store.__all__ == ["IndexNotInitializedError", "IndexStore"]
+    assert index_store.__all__ == [
+        "IndexCorruptedError",
+        "IndexNotInitializedError",
+        "IndexStore",
+    ]

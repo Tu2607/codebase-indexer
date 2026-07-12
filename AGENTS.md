@@ -35,8 +35,10 @@ When using this MCP server as an agent:
 5. After deleting an indexed file, call `delete_file_from_index`.
 6. Do not call `index_repo` repeatedly during normal work.
 
-Use full repository indexing only during first setup, after pulling large
-changes, or when the user explicitly asks for it.
+Use `index_repo` during first setup or when no usable index exists. It is
+initialization-only and does not refresh a healthy existing index. Do not rely
+on it to update an index after pulling large changes; use explicit file updates
+or the repository's future rebuild workflow instead.
 
 Search results are hints. They are not complete context, and they may be stale.
 
@@ -78,20 +80,29 @@ codebase-indexer-mcp/
       chunker.py
       hashing.py
       index_store.py
+      indexer.py
+      results.py
   tests/
 ```
 
 Module responsibilities:
 
 - `config.py`: extension allowlist, filename allowlist, skipped directories,
-  max file size, chunk defaults, Chroma persist path, collection name.
+  max file size, chunk defaults, index worker and batch defaults, Chroma
+  persist path, collection name.
 - `hashing.py`: SHA-256 file hashing helper.
 - `file_finder.py`: file filtering and repository walking, including
-  `should_index_file(path)` and `iter_indexable_files(repo_path)`.
+  `should_index_file(path)` and `iter_indexable_files(repo_path)`, which
+  returns eligible canonical files and a discovery skip count.
 - `chunker.py`: line-based chunking, including `chunk_by_lines(path,
   chunk_size, overlap)`.
 - `index_store.py`: ChromaDB client setup, collection access, adding chunks,
   deleting chunks for a file, querying chunks, and metadata/status helpers.
+- `indexer.py`: initialization-only repository orchestration, including
+  bounded worker preparation, serialized Chroma writes, and partial-failure
+  reporting.
+- `results.py`: TypedDict contracts and constructors for initialization,
+  partial failures, and single-file reindex results.
 - `server.py`: FastMCP app, MCP tool definitions, and glue logic between the
   other modules.
 
@@ -193,7 +204,6 @@ Use SHA-256 file hashes.
 
 Hashes are used for:
 
-- Detecting unchanged files during `index_repo`.
 - Detecting stale search results.
 - Creating stable-ish chunk IDs.
 - Reporting whether indexed content is current.
@@ -203,20 +213,31 @@ change that behavior.
 
 ## MCP Tools
 
-### `index_repo(repo_path: str, force: bool = False) -> dict`
+### `index_repo(repo_path: str) -> dict`
 
-Indexes important files in a repository.
+Initializes an index for a repository that does not have a usable index.
+Calling it for a healthy existing index returns immediately without walking or
+mutating the repository index.
 
 Expected behavior:
 
+- Validate that `repo_path` is an existing directory.
+- If no usable index exists, create the repository-local index and continue
+  with the initial walk.
+- If a healthy index already exists, return an initialized result with
+  `created=false` and do not walk or mutate the index.
 - Walk the repo recursively.
 - Skip ignored directories.
 - Index only files matching the tailored file rules.
-- Compute each file hash.
-- If `force` is false and the file hash has not changed, skip re-indexing.
-- Re-index changed and new files.
-- Return counts for indexed files, skipped unchanged files, skipped unindexable
-  files, and indexed chunks.
+- Prepare files with SHA-256 hashing and line-based chunking.
+- Continue when an eligible file fails during preparation or writing, and
+  report the failed files in a partial-failure error for later
+  `reindex_file` recovery.
+- Return counts for indexed files, skipped files, and indexed chunks.
+
+If the existing index is corrupted or unavailable, raise an error with
+recovery guidance. `index_repo` does not attempt to repair or rebuild a
+corrupted index.
 
 Do not use this as the normal post-edit update path. Use `reindex_file` after
 individual edits.
@@ -291,6 +312,13 @@ Useful output:
 - Possibly stale files.
 - Index path.
 - Collection name.
+
+### Future: `rebuild_index(repo_path: str) -> dict`
+
+This tool is not implemented yet. It is reserved for explicit recovery when
+the existing Chroma database or collection cannot be opened. Rebuilding may
+replace local index data, so neither `index_repo` nor `reindex_file` should
+invoke it automatically.
 
 ## Stale Index Policy
 

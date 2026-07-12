@@ -1,10 +1,11 @@
 import codebase_indexer.results as results
 from codebase_indexer.results import (
     deleted_result,
+    file_not_found_result,
     hash_failed_result,
     initialized_result,
     partial_failure_result,
-    removed_unindexable_result,
+    not_indexable_result,
     reindexed_result,
 )
 
@@ -33,15 +34,24 @@ def test_deleted_result_returns_plain_dict():
     }
 
 
-def test_removed_unindexable_result_returns_plain_dict():
-    result = removed_unindexable_result("image.png", "unsupported", 1)
+def test_file_not_found_result_returns_plain_dict():
+    result = file_not_found_result("src/deleted.py")
 
     assert type(result) is dict
     assert result == {
-        "status": "removed_unindexable",
+        "status": "file_not_found",
+        "relative_path": "src/deleted.py",
+    }
+
+
+def test_not_indexable_result_returns_plain_dict():
+    result = not_indexable_result("image.png", "unsupported")
+
+    assert type(result) is dict
+    assert result == {
+        "status": "not_indexable",
         "relative_path": "image.png",
         "reason": "unsupported",
-        "chunks_removed": 1,
     }
 
 
@@ -128,19 +138,21 @@ def test_partial_failure_result_returns_plain_dict():
 def test_results_public_surface():
     assert results.__all__ == [
         "DeletedResult",
+        "FileNotFoundResult",
         "HashFailedResult",
         "InitializedResult",
         "IndexRepoResult",
+        "NotIndexableResult",
         "PartialFailureDetail",
         "PartialFailureResult",
-        "RemovedUnindexableResult",
         "ReindexedResult",
         "ReindexResult",
         "deleted_result",
+        "file_not_found_result",
         "hash_failed_result",
         "initialized_result",
+        "not_indexable_result",
         "partial_failure_result",
-        "removed_unindexable_result",
         "reindexed_result",
     ]
 
@@ -149,7 +161,8 @@ def test_result_statuses_are_unique_discriminators():
     results_by_status = {
         reindexed_result("module.py", "a" * 64, 1, 0)["status"],
         deleted_result("module.py", 0)["status"],
-        removed_unindexable_result("module.py", "unsupported", 0)["status"],
+        file_not_found_result("missing.py")["status"],
+        not_indexable_result("module.py", "unsupported")["status"],
         hash_failed_result("module.py")["status"],
         initialized_result("/repo", "/index", created=False)["status"],
         partial_failure_result("/repo", "/index", 0, 0, 0, [])["status"],
@@ -158,7 +171,8 @@ def test_result_statuses_are_unique_discriminators():
     assert results_by_status == {
         "reindexed",
         "deleted",
-        "removed_unindexable",
+        "file_not_found",
+        "not_indexable",
         "hash_failed",
         "initialized",
         "partial_failure",

@@ -10,11 +10,10 @@ from .hashing import FileChangedDuringHashingError, hash_file
 from .index_store import IndexStore
 from .path_utils import resolve_repo_file_path
 from .results import (
-    DeletedResult,
     ReindexResult,
-    deleted_result,
+    file_not_found_result,
     hash_failed_result,
-    removed_unindexable_result,
+    not_indexable_result,
     reindexed_result,
 )
 
@@ -26,11 +25,11 @@ def reindex_single_file(
     file_path: str,
     repo_path: str | os.PathLike[str],
 ) -> ReindexResult:
-    """Reindex one file, preserving old chunks until replacement succeeds.
+    """Reindex an existing indexable file.
 
-    Chunk replacement is not atomic: a deletion failure after an upsert can leave
-    old and new chunks together. Retrying the same file reindex removes the stale
-    IDs and restores the expected state.
+    Missing and unindexable files are reported without changing stored chunks.
+    Successful replacement is not atomic: a stale-ID deletion failure after an
+    upsert can leave old and new chunks together. Retrying removes the stale IDs.
     """
 
     resolved_repo_path, resolved_file_path, relative_path = resolve_repo_file_path(
@@ -39,7 +38,7 @@ def reindex_single_file(
     )
 
     if not resolved_file_path.exists():
-        return _deleted_result(store, relative_path)
+        return file_not_found_result(relative_path)
 
     try:
         is_indexable, reason = should_index_file(
@@ -47,11 +46,9 @@ def reindex_single_file(
             resolved_repo_path,
         )
         if not is_indexable:
-            chunks_removed = store.delete_chunks_for_file(relative_path)
-            return removed_unindexable_result(
+            return not_indexable_result(
                 relative_path,
                 reason or "not indexable",
-                chunks_removed,
             )
 
         file_hash = hash_file(resolved_file_path)
@@ -61,7 +58,7 @@ def reindex_single_file(
             file_hash=file_hash,
         )
     except FileNotFoundError:
-        return _deleted_result(store, relative_path)
+        return file_not_found_result(relative_path)
     except FileChangedDuringHashingError:
         return hash_failed_result(relative_path)
 
@@ -79,8 +76,3 @@ def reindex_single_file(
         chunks_added,
         len(stale_ids),
     )
-
-
-def _deleted_result(store: IndexStore, relative_path: str) -> DeletedResult:
-    chunks_removed = store.delete_chunks_for_file(relative_path)
-    return deleted_result(relative_path, chunks_removed)

@@ -6,19 +6,21 @@ from typing import Literal, NotRequired, TypedDict
 
 __all__ = [
     "DeletedResult",
+    "FileNotFoundResult",
     "HashFailedResult",
     "InitializedResult",
     "IndexRepoResult",
+    "NotIndexableResult",
     "PartialFailureDetail",
     "PartialFailureResult",
-    "RemovedUnindexableResult",
     "ReindexedResult",
     "ReindexResult",
     "deleted_result",
+    "file_not_found_result",
     "hash_failed_result",
     "initialized_result",
+    "not_indexable_result",
     "partial_failure_result",
-    "removed_unindexable_result",
     "reindexed_result",
 ]
 
@@ -63,11 +65,15 @@ class DeletedResult(TypedDict):
     chunks_removed: int
 
 
-class RemovedUnindexableResult(TypedDict):
-    status: Literal["removed_unindexable"]
+class FileNotFoundResult(TypedDict):
+    status: Literal["file_not_found"]
+    relative_path: str
+
+
+class NotIndexableResult(TypedDict):
+    status: Literal["not_indexable"]
     relative_path: str
     reason: str
-    chunks_removed: int
 
 
 class HashFailedResult(TypedDict):
@@ -79,8 +85,8 @@ class HashFailedResult(TypedDict):
 
 ReindexResult = (
     ReindexedResult
-    | DeletedResult
-    | RemovedUnindexableResult
+    | FileNotFoundResult
+    | NotIndexableResult
     | HashFailedResult
 )
 IndexRepoResult = InitializedResult
@@ -153,16 +159,21 @@ def deleted_result(relative_path: str, chunks_removed: int) -> DeletedResult:
     }
 
 
-def removed_unindexable_result(
+def file_not_found_result(relative_path: str) -> FileNotFoundResult:
+    return {
+        "status": "file_not_found",
+        "relative_path": relative_path,
+    }
+
+
+def not_indexable_result(
     relative_path: str,
     reason: str,
-    chunks_removed: int,
-) -> RemovedUnindexableResult:
+) -> NotIndexableResult:
     return {
-        "status": "removed_unindexable",
+        "status": "not_indexable",
         "relative_path": relative_path,
         "reason": reason,
-        "chunks_removed": chunks_removed,
     }
 
 

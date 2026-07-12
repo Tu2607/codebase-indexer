@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import json
 from unittest.mock import Mock
 
 import pytest
@@ -202,11 +203,11 @@ def test_reindex_file_strips_whitespace_from_repository_path(monkeypatch, tmp_pa
     store = Mock()
     store.repo_path = tmp_path.resolve()
     open_existing = _patch_open_store(monkeypatch, store)
-    orchestrator = Mock(return_value={"status": "deleted"})
+    orchestrator = Mock(return_value={"status": "file_not_found"})
     monkeypatch.setattr(server, "reindex_single_file", orchestrator)
 
     assert server.reindex_file(f" {tmp_path} ", "module.py") == {
-        "status": "deleted"
+        "status": "file_not_found"
     }
     open_existing.assert_called_once_with(tmp_path.resolve())
 
@@ -215,7 +216,7 @@ def test_reindex_file_strips_whitespace_from_file_path(monkeypatch, tmp_path):
     store = Mock()
     store.repo_path = tmp_path.resolve()
     _patch_open_store(monkeypatch, store)
-    orchestrator = Mock(return_value={"status": "deleted"})
+    orchestrator = Mock(return_value={"status": "file_not_found"})
     monkeypatch.setattr(server, "reindex_single_file", orchestrator)
 
     server.reindex_file(str(tmp_path), " module.py ")
@@ -290,6 +291,38 @@ def test_fastmcp_dispatches_reindex_file_for_empty_indexable_file(tmp_path):
 
     assert result.is_error is False
     assert result.content[0].text
+
+
+@pytest.mark.parametrize(
+    ("file_path", "create_file", "expected_status"),
+    [
+        ("missing.py", False, "file_not_found"),
+        ("image.png", True, "not_indexable"),
+    ],
+)
+def test_fastmcp_reindex_reports_non_mutating_file_states(
+    tmp_path,
+    file_path,
+    create_file,
+    expected_status,
+):
+    from codebase_indexer.index_store import IndexStore
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    if create_file:
+        (repo_path / file_path).write_bytes(b"content")
+    IndexStore(repo_path)
+
+    result = asyncio.run(
+        server.mcp.call_tool(
+            "reindex_file",
+            {"repo_path": str(repo_path), "file_path": file_path},
+        )
+    )
+
+    assert result.is_error is False
+    assert json.loads(result.content[0].text)["status"] == expected_status
 
 
 def test_fastmcp_returns_error_for_uninitialized_repository(tmp_path):

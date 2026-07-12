@@ -55,10 +55,11 @@ def index_repo(repo_path: str) -> dict[str, object]:
 
 @mcp.tool(
     description=(
-        "Re-index one file after it has been edited, created, or overwritten. "
-        "Call this after editing any indexed file. If the file was deleted, its "
-        "chunks are removed from the index. Requires an existing index created "
-        "by index_repo."
+        "Re-index one existing, indexable file after it has been created, edited, "
+        "or overwritten. Missing and unindexable files are reported without "
+        "changing the index; use delete_file_from_index for deleted paths, old "
+        "rename paths, and files that are no longer indexable. Requires an "
+        "existing index created by index_repo."
     )
 )
 def reindex_file(repo_path: str, file_path: str) -> dict[str, object]:

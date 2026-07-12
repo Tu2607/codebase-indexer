@@ -139,8 +139,15 @@ for one eligible file should not discard successful work; the result reports
 partial failures for targeted recovery.
 
 For a healthy existing index, initialization is a no-op. Routine changes use
-`reindex_file`, which replaces one file's records, or
-`delete_file_from_index`, which removes them.
+`reindex_file`, which replaces one existing indexable file's records, or
+`delete_file_from_index`, which explicitly removes them. Reindexing reports a
+missing or unindexable target without file-level deletion. A successful
+replacement can still remove obsolete chunk IDs for that same path after the
+new chunks have been upserted.
+
+The intended update lifecycle is inspect, then mutate: `get_index_status`
+reports paths requiring reindex or deletion without changing the index, and the
+caller invokes the corresponding single-file tool for each path.
 
 A corrupted index is reported rather than repaired implicitly. A future
 explicit rebuild workflow will own destructive recovery.

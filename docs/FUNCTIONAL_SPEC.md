@@ -12,7 +12,7 @@ The tool surface is registered up front, but implementation is incremental.
 | Tool | Status | Notes |
 | --- | --- | --- |
 | `index_repo` | Implemented | Creates an absent index; a healthy existing index is a no-op. |
-| `reindex_file` | Implemented | Replaces or removes records for one path. |
+| `reindex_file` | Implemented | Replaces records for one existing, indexable path. |
 | `delete_file_from_index` | Scaffolded | Currently raises a FastMCP `ToolError`. |
 | `search_repo_context` | Scaffolded | Currently raises a FastMCP `ToolError`. |
 | `get_index_status` | Scaffolded | Currently raises a FastMCP `ToolError`. |
@@ -97,13 +97,14 @@ reported as a `ToolError` carrying the structured failure information.
 `reindex_file(repo_path: str, file_path: str) -> dict`
 
 `file_path` may be relative to the repository or an absolute path inside it.
-The tool requires an existing healthy index and has four outcomes:
+The tool requires an existing healthy index and has four outcomes. Missing and
+unindexable targets are reported without changing stored chunks:
 
 | Status | Condition | Effect |
 | --- | --- | --- |
 | `reindexed` | File exists and is eligible | Upserts current chunks, then removes obsolete chunk IDs. |
-| `deleted` | File no longer exists | Removes all stored chunks for that relative path. |
-| `removed_unindexable` | File exists but no longer passes selection | Removes old chunks and reports the reason. |
+| `file_not_found` | File no longer exists | Reports the missing path without mutation. |
+| `not_indexable` | File exists but does not pass selection | Reports the reason without mutation. |
 | `hash_failed` | File changes while being hashed | Leaves old chunks intact and returns `retryable: true`. |
 
 Normal successful shape:
@@ -121,6 +122,10 @@ Normal successful shape:
 Upserting new chunks before removing obsolete IDs preserves the old index when
 embedding or upsert fails. Reindexing unchanged content is idempotent because
 chunk IDs are deterministic.
+
+Removing obsolete chunk IDs during a successful replacement is distinct from
+file-level deletion. Call `delete_file_from_index` explicitly for deleted
+paths, old rename paths, and indexed files that are no longer eligible.
 
 An empty eligible file is still a successfully reindexed file: it produces no
 new chunks and removes any old chunks.
@@ -174,8 +179,10 @@ repository.
 Filesystem state can change between filtering, hashing, chunking, and writing.
 Implementations should preserve these properties:
 
-- A disappearance at any pre-write stage is treated as a deletion when the
-  operation can safely identify the target path.
+- A disappearance at any pre-write stage is reported as `file_not_found` and
+  preserves existing indexed content.
+- An existing file that does not pass indexing selection is reported as
+  `not_indexable` and preserves existing indexed content.
 - A concurrent write detected during hashing returns a retryable outcome and
   preserves existing chunks.
 - Read and permission errors are reported without silently deleting known-good

@@ -16,12 +16,6 @@ class FakeIndexStore:
     delete_error: Exception | None = None
     events: list[tuple[str, object]] = field(default_factory=list)
 
-    def delete_chunks_for_file(self, relative_path: str) -> int:
-        self.events.append(("delete_for_file", relative_path))
-        removed_count = len(self.old_ids)
-        self.old_ids = []
-        return removed_count
-
     def get_chunk_ids_for_file(self, relative_path: str) -> list[str]:
         self.events.append(("get_chunk_ids", relative_path))
         return list(self.old_ids)
@@ -81,7 +75,7 @@ def test_reindex_single_file_is_idempotent_when_chunk_ids_are_unchanged(tmp_path
     assert second_store.events[2] == ("delete_by_ids", [])
 
 
-def test_reindex_single_file_removes_chunks_for_missing_file(tmp_path):
+def test_reindex_single_file_reports_missing_file_without_store_access(tmp_path):
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
     store = FakeIndexStore(old_ids=["old-first", "old-second"])
@@ -89,14 +83,13 @@ def test_reindex_single_file_removes_chunks_for_missing_file(tmp_path):
     result = reindex_single_file(store, "src/deleted.py", repo_path)
 
     assert result == {
-        "status": "deleted",
+        "status": "file_not_found",
         "relative_path": "src/deleted.py",
-        "chunks_removed": 2,
     }
-    assert store.events == [("delete_for_file", "src/deleted.py")]
+    assert store.events == []
 
 
-def test_reindex_single_file_removes_chunks_for_unindexable_file(tmp_path):
+def test_reindex_single_file_reports_unindexable_file_without_store_access(tmp_path):
     repo_path = tmp_path / "repo"
     file_path = repo_path / "image.png"
     repo_path.mkdir()
@@ -106,12 +99,11 @@ def test_reindex_single_file_removes_chunks_for_unindexable_file(tmp_path):
     result = reindex_single_file(store, file_path.name, repo_path)
 
     assert result == {
-        "status": "removed_unindexable",
+        "status": "not_indexable",
         "relative_path": "image.png",
         "reason": "unsupported file type: image.png",
-        "chunks_removed": 1,
     }
-    assert store.events == [("delete_for_file", "image.png")]
+    assert store.events == []
 
 
 def test_reindex_single_file_reindexes_empty_file_and_removes_old_chunks(tmp_path):
@@ -163,7 +155,7 @@ def test_reindex_single_file_leaves_index_unchanged_when_hashing_fails(
     assert store.events == []
 
 
-def test_reindex_single_file_deletes_chunks_when_file_disappears_during_filtering(
+def test_reindex_single_file_reports_when_file_disappears_during_filtering(
     monkeypatch,
     tmp_path,
 ):
@@ -181,14 +173,34 @@ def test_reindex_single_file_deletes_chunks_when_file_disappears_during_filterin
     result = reindex_single_file(store, "module.py", repo_path)
 
     assert result == {
-        "status": "deleted",
+        "status": "file_not_found",
         "relative_path": "module.py",
-        "chunks_removed": 1,
     }
-    assert store.events == [("delete_for_file", "module.py")]
+    assert store.events == []
 
 
-def test_reindex_single_file_deletes_chunks_when_file_disappears_during_hashing(
+def test_reindex_single_file_propagates_permission_error_during_filtering(
+    monkeypatch,
+    tmp_path,
+):
+    repo_path = tmp_path / "repo"
+    file_path = repo_path / "module.py"
+    repo_path.mkdir()
+    file_path.write_text("content\n", encoding="utf-8")
+    store = FakeIndexStore(old_ids=["old-chunk"])
+
+    def raise_permission_error(file_path, repo_path):
+        raise PermissionError("cannot inspect file")
+
+    monkeypatch.setattr(reindexer, "should_index_file", raise_permission_error)
+
+    with pytest.raises(PermissionError, match="cannot inspect file"):
+        reindex_single_file(store, "module.py", repo_path)
+
+    assert store.events == []
+
+
+def test_reindex_single_file_reports_when_file_disappears_during_hashing(
     monkeypatch,
     tmp_path,
 ):
@@ -206,14 +218,13 @@ def test_reindex_single_file_deletes_chunks_when_file_disappears_during_hashing(
     result = reindex_single_file(store, "module.py", repo_path)
 
     assert result == {
-        "status": "deleted",
+        "status": "file_not_found",
         "relative_path": "module.py",
-        "chunks_removed": 1,
     }
-    assert store.events == [("delete_for_file", "module.py")]
+    assert store.events == []
 
 
-def test_reindex_single_file_deletes_chunks_when_file_disappears_during_chunking(
+def test_reindex_single_file_reports_when_file_disappears_during_chunking(
     monkeypatch,
     tmp_path,
 ):
@@ -231,11 +242,10 @@ def test_reindex_single_file_deletes_chunks_when_file_disappears_during_chunking
     result = reindex_single_file(store, "module.py", repo_path)
 
     assert result == {
-        "status": "deleted",
+        "status": "file_not_found",
         "relative_path": "module.py",
-        "chunks_removed": 1,
     }
-    assert store.events == [("delete_for_file", "module.py")]
+    assert store.events == []
 
 
 def test_reindex_single_file_rejects_file_outside_repo_before_store_access(tmp_path):

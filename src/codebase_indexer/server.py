@@ -4,9 +4,11 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
 from .config import SERVER_NAME
+from .indexer import IndexPartialFailureError, index_repository
 from .index_store import IndexCorruptedError, IndexNotInitializedError, IndexStore
 from .path_utils import validate_repo_path
 from .reindexer import reindex_single_file
+from .results import initialized_result
 
 mcp = FastMCP(SERVER_NAME)
 
@@ -17,12 +19,38 @@ def _raise_not_implemented(tool_name: str) -> NoReturn:
 
 @mcp.tool(
     description=(
-        "Index important files in a repository. Use full repo indexing for "
-        "initial setup, large pulled changes, or explicit user requests."
+        "Initialize a repository index. Call this at the beginning of a "
+        "session or when no usable index exists. If the index already exists "
+        "and is healthy, returns immediately without modifying it. For "
+        "updating individual files after edits, use reindex_file instead."
     )
 )
-def index_repo(repo_path: str, force: bool = False) -> dict[str, object]:
-    _raise_not_implemented("index_repo")
+def index_repo(repo_path: str) -> dict[str, object]:
+    try:
+        resolved_repo_path = validate_repo_path(repo_path)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+
+    try:
+        store = IndexStore.open_existing(resolved_repo_path)
+    except IndexNotInitializedError:
+        try:
+            store = IndexStore(resolved_repo_path)
+        except ValueError as exc:
+            raise ToolError(str(exc)) from exc
+    except IndexCorruptedError as exc:
+        raise ToolError(str(exc)) from exc
+    else:
+        return initialized_result(
+            str(resolved_repo_path),
+            str(store.index_dir),
+            created=False,
+        )
+
+    try:
+        return index_repository(store, resolved_repo_path)
+    except IndexPartialFailureError as exc:
+        raise ToolError(str(exc)) from exc
 
 
 @mcp.tool(

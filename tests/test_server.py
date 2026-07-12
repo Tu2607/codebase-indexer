@@ -6,6 +6,7 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 import codebase_indexer.server as server
+from codebase_indexer.indexer import IndexPartialFailureError
 from codebase_indexer.index_store import IndexCorruptedError, IndexNotInitializedError
 
 
@@ -13,6 +14,117 @@ def _patch_open_store(monkeypatch, store):
     open_existing = Mock(return_value=store)
     monkeypatch.setattr(server.IndexStore, "open_existing", open_existing)
     return open_existing
+
+
+def test_index_repo_creates_new_store_and_delegates_to_indexer(monkeypatch, tmp_path):
+    store = Mock()
+    store.index_dir = tmp_path / ".codebase-index"
+    index_store_class = Mock(return_value=store)
+    index_store_class.open_existing = Mock(
+        side_effect=IndexNotInitializedError("not initialized")
+    )
+    monkeypatch.setattr(server, "IndexStore", index_store_class)
+    orchestrator = Mock(
+        return_value={
+            "status": "initialized",
+            "repo_path": str(tmp_path.resolve()),
+            "index_path": str(store.index_dir),
+            "created": True,
+            "files_indexed": 2,
+            "chunks_indexed": 3,
+            "files_skipped": 1,
+        }
+    )
+    monkeypatch.setattr(server, "index_repository", orchestrator)
+
+    result = server.index_repo(str(tmp_path))
+
+    assert result == orchestrator.return_value
+    index_store_class.open_existing.assert_called_once_with(tmp_path.resolve())
+    index_store_class.assert_called_once_with(tmp_path.resolve())
+    orchestrator.assert_called_once_with(store, tmp_path.resolve())
+
+
+def test_index_repo_returns_without_walking_healthy_existing_index(
+    monkeypatch,
+    tmp_path,
+):
+    store = Mock()
+    store.index_dir = tmp_path / ".codebase-index"
+    open_existing = _patch_open_store(monkeypatch, store)
+    orchestrator = Mock()
+    monkeypatch.setattr(server, "index_repository", orchestrator)
+
+    result = server.index_repo(str(tmp_path))
+
+    assert result == {
+        "status": "initialized",
+        "repo_path": str(tmp_path.resolve()),
+        "index_path": str(store.index_dir),
+        "created": False,
+    }
+    open_existing.assert_called_once_with(tmp_path.resolve())
+    orchestrator.assert_not_called()
+
+
+def test_index_repo_converts_corrupted_index_error_to_tool_error(
+    monkeypatch,
+    tmp_path,
+):
+    open_existing = Mock(side_effect=IndexCorruptedError("run rebuild_index"))
+    monkeypatch.setattr(server.IndexStore, "open_existing", open_existing)
+
+    with pytest.raises(ToolError, match="rebuild_index"):
+        server.index_repo(str(tmp_path))
+
+    open_existing.assert_called_once_with(tmp_path.resolve())
+
+
+@pytest.mark.parametrize("repo_path", [None, "", " ", "missing"])
+def test_index_repo_rejects_invalid_repository_path(repo_path):
+    with pytest.raises(ToolError, match="repo_path"):
+        server.index_repo(repo_path)
+
+
+def test_index_repo_converts_store_creation_value_error_to_tool_error(
+    monkeypatch,
+    tmp_path,
+):
+    index_store_class = Mock(side_effect=ValueError("index cannot be created"))
+    index_store_class.open_existing = Mock(
+        side_effect=IndexNotInitializedError("not initialized")
+    )
+    monkeypatch.setattr(server, "IndexStore", index_store_class)
+
+    with pytest.raises(ToolError, match="index cannot be created"):
+        server.index_repo(str(tmp_path))
+
+
+def test_index_repo_propagates_unexpected_open_existing_error(monkeypatch, tmp_path):
+    error = RuntimeError("unexpected index failure")
+    open_existing = Mock(side_effect=error)
+    monkeypatch.setattr(server.IndexStore, "open_existing", open_existing)
+
+    with pytest.raises(RuntimeError, match="unexpected index failure"):
+        server.index_repo(str(tmp_path))
+
+
+def test_index_repo_converts_partial_failure_to_tool_error(monkeypatch, tmp_path):
+    store = Mock()
+    store.index_dir = tmp_path / ".codebase-index"
+    index_store_class = Mock(return_value=store)
+    index_store_class.open_existing = Mock(
+        side_effect=IndexNotInitializedError("not initialized")
+    )
+    monkeypatch.setattr(server, "IndexStore", index_store_class)
+    error = IndexPartialFailureError('{"status": "partial_failure"}')
+    orchestrator = Mock(side_effect=error)
+    monkeypatch.setattr(server, "index_repository", orchestrator)
+
+    with pytest.raises(ToolError, match="partial_failure"):
+        server.index_repo(str(tmp_path))
+
+    orchestrator.assert_called_once_with(store, tmp_path.resolve())
 
 
 def test_reindex_file_wires_store_and_orchestrator(monkeypatch, tmp_path):
@@ -212,6 +324,7 @@ def test_scaffolded_index_tools_raise_tool_error(tool_name, arguments):
 
 
 def test_server_tool_signatures_use_explicit_repo_path():
+    assert list(inspect.signature(server.index_repo).parameters) == ["repo_path"]
     assert inspect.signature(server.reindex_file).parameters.keys() >= {
         "repo_path",
         "file_path",

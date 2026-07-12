@@ -13,7 +13,7 @@ The tool surface is registered up front, but implementation is incremental.
 | --- | --- | --- |
 | `index_repo` | Implemented | Creates an absent index; a healthy existing index is a no-op. |
 | `reindex_file` | Implemented | Replaces records for one existing, indexable path. |
-| `delete_file_from_index` | Scaffolded | Currently raises a FastMCP `ToolError`. |
+| `delete_file_from_index` | Implemented | Explicitly removes all records for one path. |
 | `search_repo_context` | Scaffolded | Currently raises a FastMCP `ToolError`. |
 | `get_index_status` | Scaffolded | Currently raises a FastMCP `ToolError`. |
 | `rebuild_index` | Reserved | Not registered or implemented in v0. |
@@ -130,13 +130,28 @@ paths, old rename paths, and indexed files that are no longer eligible.
 An empty eligible file is still a successfully reindexed file: it produces no
 new chunks and removes any old chunks.
 
-## Planned deletion behavior
+## `delete_file_from_index`
 
 `delete_file_from_index(repo_path: str, file_path: str) -> dict`
 
-This tool will remove every chunk associated with a repository-relative path,
+This tool removes every chunk associated with a repository-relative path,
 whether or not the file still exists. It is the explicit cleanup operation for
-deletions and the old side of a rename.
+deletions, files that are no longer indexable, and the old side of a rename.
+
+`file_path` may be relative to the repository or absolute within it. The path
+is normalized without requiring the target to exist, must resolve inside the
+repository, and is not read, hashed, or checked for index eligibility.
+
+The operation is idempotent. A valid path with no indexed chunks returns
+`deleted` with `chunks_removed: 0`.
+
+```json
+{
+  "status": "deleted",
+  "relative_path": "src/old_name.py",
+  "chunks_removed": 3
+}
+```
 
 For a rename, delete the old path and then reindex the new path.
 

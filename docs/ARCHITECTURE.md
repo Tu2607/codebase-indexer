@@ -149,6 +149,11 @@ The intended update lifecycle is inspect, then mutate: `get_index_status`
 reports paths requiring reindex or deletion without changing the index, and the
 caller invokes the corresponding single-file tool for each path.
 
+Deletion is path-based and idempotent. It normalizes an existing or missing
+path inside the repository, then removes all chunks with that relative path. It
+does not inspect file content or eligibility. A rename is represented as two
+explicit operations: delete the old path, then reindex the new path.
+
 A corrupted index is reported rather than repaired implicitly. A future
 explicit rebuild workflow will own destructive recovery.
 

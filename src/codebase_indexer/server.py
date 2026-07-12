@@ -4,6 +4,7 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
 from .config import SERVER_NAME
+from .deleter import delete_indexed_file
 from .indexer import IndexPartialFailureError, index_repository
 from .index_store import IndexCorruptedError, IndexNotInitializedError, IndexStore
 from .path_utils import validate_repo_path
@@ -90,12 +91,35 @@ def reindex_file(repo_path: str, file_path: str) -> dict[str, object]:
 
 @mcp.tool(
     description=(
-        "Remove one file's chunks from the index. Use this after deleting or "
-        "renaming an indexed file."
+        "Explicitly remove one path's chunks from an existing index, whether or "
+        "not the file still exists. Use this for deleted files, files that are no "
+        "longer indexable, and the old path of a rename; then reindex the new "
+        "rename path separately."
     )
 )
 def delete_file_from_index(repo_path: str, file_path: str) -> dict[str, object]:
-    _raise_not_implemented("delete_file_from_index")
+    try:
+        resolved_repo_path = validate_repo_path(repo_path)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+
+    cleaned_file_path = file_path.strip() if file_path else ""
+    if not cleaned_file_path:
+        raise ToolError("file_path is required.")
+
+    try:
+        store = IndexStore.open_existing(resolved_repo_path)
+    except IndexNotInitializedError as exc:
+        raise ToolError(str(exc)) from exc
+    except IndexCorruptedError as exc:
+        raise ToolError(str(exc)) from exc
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+
+    try:
+        return delete_indexed_file(store, cleaned_file_path, store.repo_path)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
 
 
 @mcp.tool(

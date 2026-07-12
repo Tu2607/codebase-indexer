@@ -274,6 +274,113 @@ def test_reindex_file_does_not_swallow_unexpected_orchestrator_errors(
         server.reindex_file(str(tmp_path), "module.py")
 
 
+def test_delete_file_from_index_wires_store_and_orchestrator(monkeypatch, tmp_path):
+    store = Mock()
+    store.repo_path = tmp_path.resolve()
+    open_existing = _patch_open_store(monkeypatch, store)
+    orchestrator = Mock(
+        return_value={
+            "status": "deleted",
+            "relative_path": "module.py",
+            "chunks_removed": 2,
+        }
+    )
+    monkeypatch.setattr(server, "delete_indexed_file", orchestrator)
+
+    result = server.delete_file_from_index(str(tmp_path), "module.py")
+
+    assert result == orchestrator.return_value
+    open_existing.assert_called_once_with(tmp_path.resolve())
+    orchestrator.assert_called_once_with(store, "module.py", tmp_path.resolve())
+
+
+@pytest.mark.parametrize("repo_path", [None, "", " ", "missing"])
+def test_delete_file_from_index_rejects_invalid_repository_path(repo_path):
+    with pytest.raises(ToolError, match="repo_path"):
+        server.delete_file_from_index(repo_path, "module.py")
+
+
+@pytest.mark.parametrize("file_path", [None, "", " "])
+def test_delete_file_from_index_rejects_empty_file_path(
+    monkeypatch,
+    tmp_path,
+    file_path,
+):
+    open_existing = Mock()
+    monkeypatch.setattr(server.IndexStore, "open_existing", open_existing)
+
+    with pytest.raises(ToolError, match="file_path is required"):
+        server.delete_file_from_index(str(tmp_path), file_path)
+
+    open_existing.assert_not_called()
+
+
+def test_delete_file_from_index_strips_file_path(monkeypatch, tmp_path):
+    store = Mock()
+    store.repo_path = tmp_path.resolve()
+    _patch_open_store(monkeypatch, store)
+    orchestrator = Mock(return_value={"status": "deleted"})
+    monkeypatch.setattr(server, "delete_indexed_file", orchestrator)
+
+    server.delete_file_from_index(str(tmp_path), " module.py ")
+
+    assert orchestrator.call_args.args[1] == "module.py"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        IndexNotInitializedError("run index_repo"),
+        IndexCorruptedError("run rebuild_index"),
+        ValueError("corrupt metadata"),
+    ],
+)
+def test_delete_file_from_index_converts_expected_store_errors(
+    monkeypatch,
+    tmp_path,
+    error,
+):
+    monkeypatch.setattr(
+        server.IndexStore,
+        "open_existing",
+        Mock(side_effect=error),
+    )
+
+    with pytest.raises(ToolError, match=str(error)):
+        server.delete_file_from_index(str(tmp_path), "module.py")
+
+
+def test_delete_file_from_index_converts_path_error(monkeypatch, tmp_path):
+    store = Mock()
+    store.repo_path = tmp_path.resolve()
+    _patch_open_store(monkeypatch, store)
+    monkeypatch.setattr(
+        server,
+        "delete_indexed_file",
+        Mock(side_effect=ValueError("file_path resolves outside repo_path")),
+    )
+
+    with pytest.raises(ToolError, match="outside repo_path"):
+        server.delete_file_from_index(str(tmp_path), "../outside.py")
+
+
+def test_delete_file_from_index_does_not_swallow_unexpected_errors(
+    monkeypatch,
+    tmp_path,
+):
+    store = Mock()
+    store.repo_path = tmp_path.resolve()
+    _patch_open_store(monkeypatch, store)
+    monkeypatch.setattr(
+        server,
+        "delete_indexed_file",
+        Mock(side_effect=RuntimeError("delete failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="delete failed"):
+        server.delete_file_from_index(str(tmp_path), "module.py")
+
+
 def test_fastmcp_dispatches_reindex_file_for_empty_indexable_file(tmp_path):
     from codebase_indexer.index_store import IndexStore
 
@@ -325,6 +432,38 @@ def test_fastmcp_reindex_reports_non_mutating_file_states(
     assert json.loads(result.content[0].text)["status"] == expected_status
 
 
+def test_fastmcp_dispatches_delete_file_from_index(tmp_path):
+    from codebase_indexer.index_store import IndexStore
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    store = IndexStore(repo_path)
+    store.collection.add(
+        ids=["remove", "keep"],
+        embeddings=[[0.1], [0.2]],
+        documents=["remove", "keep"],
+        metadatas=[
+            {"relative_path": "old.py"},
+            {"relative_path": "keep.py"},
+        ],
+    )
+
+    result = asyncio.run(
+        server.mcp.call_tool(
+            "delete_file_from_index",
+            {"repo_path": str(repo_path), "file_path": "old.py"},
+        )
+    )
+
+    assert result.is_error is False
+    assert json.loads(result.content[0].text) == {
+        "status": "deleted",
+        "relative_path": "old.py",
+        "chunks_removed": 1,
+    }
+    assert store.collection.get()["ids"] == ["keep"]
+
+
 def test_fastmcp_returns_error_for_uninitialized_repository(tmp_path):
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
@@ -341,10 +480,6 @@ def test_fastmcp_returns_error_for_uninitialized_repository(tmp_path):
 @pytest.mark.parametrize(
     ("tool_name", "arguments"),
     [
-        (
-            "delete_file_from_index",
-            {"repo_path": "/tmp/repo", "file_path": "module.py"},
-        ),
         (
             "search_repo_context",
             {"repo_path": "/tmp/repo", "query": "module"},

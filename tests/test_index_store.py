@@ -273,6 +273,42 @@ def test_get_chunk_ids_for_file_filters_by_relative_path(tmp_path):
     assert store.get_chunk_ids_for_file("src/missing.py") == []
 
 
+def test_get_indexed_file_metadata_returns_only_metadata(tmp_path):
+    store = IndexStore(tmp_path)
+    store.collection.add(
+        ids=["first", "second"],
+        embeddings=[_embedding(0.1), _embedding(0.2)],
+        documents=["first document", "second document"],
+        metadatas=[
+            {"relative_path": "module.py", "file_hash": "a"},
+            {"relative_path": "module.py", "file_hash": "a"},
+        ],
+    )
+
+    assert store.get_indexed_file_metadata() == [
+        {"file_hash": "a", "relative_path": "module.py"},
+        {"file_hash": "a", "relative_path": "module.py"},
+    ]
+
+
+def test_get_indexed_file_metadata_requests_no_documents_or_embeddings():
+    store = IndexStore.__new__(IndexStore)
+    store._collection = Mock(
+        **{"get.return_value": {"metadatas": [{"relative_path": "module.py"}]}}
+    )
+
+    result = store.get_indexed_file_metadata()
+
+    assert result == [{"relative_path": "module.py"}]
+    store._collection.get.assert_called_once_with(include=["metadatas"])
+
+
+def test_get_indexed_file_metadata_returns_empty_list_for_empty_collection(tmp_path):
+    store = IndexStore(tmp_path)
+
+    assert store.get_indexed_file_metadata() == []
+
+
 def test_upsert_chunks_adds_and_replaces_chunks(tmp_path):
     IndexStore(tmp_path)
     store = IndexStore.open_existing(

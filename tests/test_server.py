@@ -381,6 +381,59 @@ def test_delete_file_from_index_does_not_swallow_unexpected_errors(
         server.delete_file_from_index(str(tmp_path), "module.py")
 
 
+def test_get_index_status_wires_store_and_orchestrator(monkeypatch, tmp_path):
+    store = Mock()
+    store.repo_path = tmp_path.resolve()
+    open_existing = _patch_open_store(monkeypatch, store)
+    orchestrator = Mock(return_value={"status": "clean"})
+    monkeypatch.setattr(server, "get_repository_index_status", orchestrator)
+
+    result = server.get_index_status(str(tmp_path))
+
+    assert result == {"status": "clean"}
+    open_existing.assert_called_once_with(tmp_path.resolve())
+    orchestrator.assert_called_once_with(store, tmp_path.resolve())
+
+
+@pytest.mark.parametrize("repo_path", [None, "", " ", "missing"])
+def test_get_index_status_rejects_invalid_repository_path(repo_path):
+    with pytest.raises(ToolError, match="repo_path"):
+        server.get_index_status(repo_path)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        IndexNotInitializedError("run index_repo"),
+        IndexCorruptedError("run rebuild_index"),
+        ValueError("corrupt metadata"),
+    ],
+)
+def test_get_index_status_converts_expected_store_errors(monkeypatch, tmp_path, error):
+    monkeypatch.setattr(
+        server.IndexStore,
+        "open_existing",
+        Mock(side_effect=error),
+    )
+
+    with pytest.raises(ToolError, match=str(error)):
+        server.get_index_status(str(tmp_path))
+
+
+def test_get_index_status_does_not_swallow_unexpected_errors(monkeypatch, tmp_path):
+    store = Mock()
+    store.repo_path = tmp_path.resolve()
+    _patch_open_store(monkeypatch, store)
+    monkeypatch.setattr(
+        server,
+        "get_repository_index_status",
+        Mock(side_effect=RuntimeError("status failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="status failed"):
+        server.get_index_status(str(tmp_path))
+
+
 def test_fastmcp_dispatches_reindex_file_for_empty_indexable_file(tmp_path):
     from codebase_indexer.index_store import IndexStore
 
@@ -464,6 +517,29 @@ def test_fastmcp_dispatches_delete_file_from_index(tmp_path):
     assert store.collection.get()["ids"] == ["keep"]
 
 
+def test_fastmcp_dispatches_get_index_status_without_mutation(tmp_path):
+    from codebase_indexer.index_store import IndexStore
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    (repo_path / "new.py").write_text("content\n", encoding="utf-8")
+    store = IndexStore(repo_path)
+
+    result = asyncio.run(
+        server.mcp.call_tool(
+            "get_index_status",
+            {"repo_path": str(repo_path)},
+        )
+    )
+
+    assert result.is_error is False
+    payload = json.loads(result.content[0].text)
+    assert payload["files_to_reindex"] == [
+        {"relative_path": "new.py", "reason": "not_indexed"}
+    ]
+    assert store.collection_count() == 0
+
+
 def test_fastmcp_returns_error_for_uninitialized_repository(tmp_path):
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
@@ -506,4 +582,7 @@ def test_server_tool_signatures_use_explicit_repo_path():
         "query",
         "max_results",
         "include_stale",
+    ]
+    assert list(inspect.signature(server.get_index_status).parameters) == [
+        "repo_path"
     ]

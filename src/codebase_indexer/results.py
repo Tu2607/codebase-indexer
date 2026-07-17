@@ -9,6 +9,9 @@ __all__ = [
     "FileNotFoundResult",
     "HashFailedResult",
     "InitializedResult",
+    "IndexStatusAction",
+    "IndexStatusError",
+    "IndexStatusResult",
     "IndexRepoResult",
     "NotIndexableResult",
     "PartialFailureDetail",
@@ -19,6 +22,7 @@ __all__ = [
     "file_not_found_result",
     "hash_failed_result",
     "initialized_result",
+    "index_status_result",
     "not_indexable_result",
     "partial_failure_result",
     "reindexed_result",
@@ -49,6 +53,28 @@ class PartialFailureResult(TypedDict):
     files_skipped: int
     files_failed: int
     failures: list[PartialFailureDetail]
+
+
+class IndexStatusAction(TypedDict):
+    relative_path: str
+    reason: str
+
+
+class IndexStatusError(TypedDict):
+    relative_path: str
+    reason: str
+
+
+class IndexStatusResult(TypedDict):
+    status: Literal["clean", "changes_detected"]
+    repo_path: str
+    index_path: str
+    collection_name: str
+    indexed_files: int
+    indexed_chunks: int
+    files_to_reindex: list[IndexStatusAction]
+    files_to_delete: list[IndexStatusAction]
+    files_with_errors: list[IndexStatusError]
 
 
 class ReindexedResult(TypedDict):
@@ -133,6 +159,30 @@ def partial_failure_result(
         "files_skipped": files_skipped,
         "files_failed": len(failures),
         "failures": failures,
+    }
+
+
+def index_status_result(
+    repo_path: str,
+    index_path: str,
+    collection_name: str,
+    indexed_files: int,
+    indexed_chunks: int,
+    files_to_reindex: list[IndexStatusAction],
+    files_to_delete: list[IndexStatusAction],
+    files_with_errors: list[IndexStatusError],
+) -> IndexStatusResult:
+    has_changes = bool(files_to_reindex or files_to_delete or files_with_errors)
+    return {
+        "status": "changes_detected" if has_changes else "clean",
+        "repo_path": repo_path,
+        "index_path": index_path,
+        "collection_name": collection_name,
+        "indexed_files": indexed_files,
+        "indexed_chunks": indexed_chunks,
+        "files_to_reindex": files_to_reindex,
+        "files_to_delete": files_to_delete,
+        "files_with_errors": files_with_errors,
     }
 
 

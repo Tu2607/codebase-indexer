@@ -149,6 +149,23 @@ The intended update lifecycle is inspect, then mutate: `get_index_status`
 reports paths requiring reindex or deletion without changing the index, and the
 caller invokes the corresponding single-file tool for each path.
 
+Status derives a file-level view by grouping chunk metadata by relative path
+and stored file hash, then compares it with the current eligible repository
+walk. Missing and no-longer-indexable indexed paths are deletion candidates;
+new, changed, and internally inconsistent paths are reindex candidates. Read,
+hashing, and metadata failures are reported separately and never trigger a
+destructive recommendation. The comparison is an explicit point-in-time scan,
+not a cache or background synchronization mechanism.
+
+For v0, the explicit scan reads all chunk metadata into memory in one ChromaDB
+request. Pagination is deferred unless personal repository sizes demonstrate a
+need for it.
+
+Because v0 stores chunks rather than a separate file manifest, an indexed empty
+file has no persistent record. Status therefore conservatively reports an
+eligible empty file as unindexed. Adding synchronized file-level state is
+deferred until that edge case justifies the additional storage lifecycle.
+
 Deletion is path-based and idempotent. It normalizes an existing or missing
 path inside the repository, then removes all chunks with that relative path. It
 does not inspect file content or eligibility. A rename is represented as two

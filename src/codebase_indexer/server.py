@@ -10,6 +10,7 @@ from .index_store import IndexCorruptedError, IndexNotInitializedError, IndexSto
 from .path_utils import validate_repo_path
 from .reindexer import reindex_single_file
 from .results import initialized_result
+from .status import get_repository_index_status
 
 mcp = FastMCP(SERVER_NAME)
 
@@ -139,6 +140,26 @@ def search_repo_context(
     _raise_not_implemented("search_repo_context")
 
 
-@mcp.tool(description="Return debugging information about the current index.")
-def get_index_status(repo_path: str | None = None) -> dict[str, object]:
-    _raise_not_implemented("get_index_status")
+@mcp.tool(
+    description=(
+        "Read repository and index state, then report paths that need "
+        "reindex_file or delete_file_from_index. This tool is read-only and "
+        "never applies the reported actions."
+    )
+)
+def get_index_status(repo_path: str) -> dict[str, object]:
+    try:
+        resolved_repo_path = validate_repo_path(repo_path)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+
+    try:
+        store = IndexStore.open_existing(resolved_repo_path)
+    except IndexNotInitializedError as exc:
+        raise ToolError(str(exc)) from exc
+    except IndexCorruptedError as exc:
+        raise ToolError(str(exc)) from exc
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+
+    return get_repository_index_status(store, store.repo_path)

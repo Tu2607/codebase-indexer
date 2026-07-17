@@ -128,6 +128,12 @@ class IndexStore:
         )
         return result["ids"]
 
+    def get_indexed_file_metadata(self) -> list[dict[str, object] | None]:
+        """Return chunk metadata used to build a read-only file status view."""
+
+        result = self._collection.get(include=["metadatas"])
+        return result["metadatas"] or []
+
     def upsert_chunks(self, chunks: list[TextChunk]) -> None:
         """Add or replace a collection of text chunks by ID."""
 

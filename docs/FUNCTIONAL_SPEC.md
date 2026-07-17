@@ -15,7 +15,7 @@ The tool surface is registered up front, but implementation is incremental.
 | `reindex_file` | Implemented | Replaces records for one existing, indexable path. |
 | `delete_file_from_index` | Implemented | Explicitly removes all records for one path. |
 | `search_repo_context` | Scaffolded | Currently raises a FastMCP `ToolError`. |
-| `get_index_status` | Scaffolded | Currently raises a FastMCP `ToolError`. |
+| `get_index_status` | Implemented | Read-only report of paths needing reindex or deletion. |
 | `rebuild_index` | Reserved | Not registered or implemented in v0. |
 
 [`steps/`](steps/) records completed work and upcoming implementation slices.
@@ -176,18 +176,45 @@ When `include_stale` is false, stale matches should be omitted. When it is true,
 they may be returned but must be unmistakably marked. Results remain discovery
 hints; callers read the file itself before editing.
 
-## Planned status behavior
+## `get_index_status`
 
-`get_index_status(repo_path: str | None = None) -> dict`
+`get_index_status(repo_path: str) -> dict`
 
-Status output is intended for diagnosis and should include the resolved index
-path, collection name, indexed file count, chunk count, and a small sample of
-indexed paths. Stale-file reporting may be included if it can be computed
-without hidden updates.
+The tool compares current repository files with indexed chunk metadata and
+reports explicit follow-up actions. It never reindexes, deletes, repairs, or
+otherwise mutates the index.
 
-If `repo_path` remains optional, its no-argument semantics must be defined
-explicitly before implementation; other index-backed tools do not infer a
-repository.
+New and content-changed eligible files appear in `files_to_reindex`. Missing
+indexed paths and indexed files that are no longer eligible appear in
+`files_to_delete`. Filesystem, hashing, and malformed-metadata problems appear
+in `files_with_errors` and never become deletion recommendations.
+
+```json
+{
+  "status": "changes_detected",
+  "repo_path": "/absolute/repository",
+  "index_path": "/absolute/repository/.codebase-index",
+  "collection_name": "codebase_indexer",
+  "indexed_files": 2,
+  "indexed_chunks": 5,
+  "files_to_reindex": [
+    {"relative_path": "src/new.py", "reason": "not_indexed"}
+  ],
+  "files_to_delete": [
+    {"relative_path": "src/old.py", "reason": "missing"}
+  ],
+  "files_with_errors": []
+}
+```
+
+The status is `clean` only when both action lists and the error list are empty.
+All lists are sorted by repository-relative path. Rename detection is not
+inferred: a rename is reported as one old-path deletion and one new-path
+reindex.
+
+The current index has no file manifest. An eligible empty file produces no
+chunks, so status conservatively reports it as `not_indexed` on each call.
+Reindexing it is safe and idempotent; file-level manifest storage is deferred.
 
 ## File-change edge cases
 

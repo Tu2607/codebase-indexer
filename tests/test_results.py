@@ -3,6 +3,7 @@ from codebase_indexer.results import (
     deleted_result,
     file_not_found_result,
     hash_failed_result,
+    index_status_result,
     initialized_result,
     partial_failure_result,
     not_indexable_result,
@@ -65,6 +66,47 @@ def test_hash_failed_result_returns_retryable_plain_dict():
         "retryable": True,
         "message": "File changed during hashing; retry after the write completes",
     }
+
+
+def test_index_status_result_returns_clean_plain_dict():
+    result = index_status_result(
+        "/repo",
+        "/repo/.codebase-index",
+        "codebase_indexer",
+        2,
+        4,
+        [],
+        [],
+        [],
+    )
+
+    assert type(result) is dict
+    assert result == {
+        "status": "clean",
+        "repo_path": "/repo",
+        "index_path": "/repo/.codebase-index",
+        "collection_name": "codebase_indexer",
+        "indexed_files": 2,
+        "indexed_chunks": 4,
+        "files_to_reindex": [],
+        "files_to_delete": [],
+        "files_with_errors": [],
+    }
+
+
+def test_index_status_result_reports_changes_when_errors_exist():
+    result = index_status_result(
+        "/repo",
+        "/index",
+        "collection",
+        0,
+        0,
+        [],
+        [],
+        [{"relative_path": "module.py", "reason": "cannot read"}],
+    )
+
+    assert result["status"] == "changes_detected"
 
 
 def test_initialized_result_with_created_true_includes_walk_counts():
@@ -141,6 +183,9 @@ def test_results_public_surface():
         "FileNotFoundResult",
         "HashFailedResult",
         "InitializedResult",
+        "IndexStatusAction",
+        "IndexStatusError",
+        "IndexStatusResult",
         "IndexRepoResult",
         "NotIndexableResult",
         "PartialFailureDetail",
@@ -151,6 +196,7 @@ def test_results_public_surface():
         "file_not_found_result",
         "hash_failed_result",
         "initialized_result",
+        "index_status_result",
         "not_indexable_result",
         "partial_failure_result",
         "reindexed_result",
@@ -165,6 +211,9 @@ def test_result_statuses_are_unique_discriminators():
         not_indexable_result("module.py", "unsupported")["status"],
         hash_failed_result("module.py")["status"],
         initialized_result("/repo", "/index", created=False)["status"],
+        index_status_result("/repo", "/index", "collection", 0, 0, [], [], [
+            {"relative_path": "file.py", "reason": "error"}
+        ])["status"],
         partial_failure_result("/repo", "/index", 0, 0, 0, [])["status"],
     }
 
@@ -175,6 +224,7 @@ def test_result_statuses_are_unique_discriminators():
         "not_indexable",
         "hash_failed",
         "initialized",
+        "changes_detected",
         "partial_failure",
     }
 

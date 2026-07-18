@@ -5,11 +5,11 @@ from fastmcp.exceptions import ToolError
 
 from .config import SERVER_NAME
 from .deleter import delete_indexed_file
-from .indexer import IndexPartialFailureError, index_repository
+from .indexer import index_repository
 from .index_store import IndexCorruptedError, IndexNotInitializedError, IndexStore
 from .path_utils import validate_repo_path
 from .reindexer import reindex_single_file
-from .results import initialized_result
+from .results import initialized_result, removed_index_result
 from .status import get_repository_index_status
 
 mcp = FastMCP(SERVER_NAME)
@@ -35,24 +35,28 @@ def index_repo(repo_path: str) -> dict[str, object]:
 
     try:
         store = IndexStore.open_existing(resolved_repo_path)
+        created = False
     except IndexNotInitializedError:
         try:
             store = IndexStore(resolved_repo_path)
         except ValueError as exc:
             raise ToolError(str(exc)) from exc
+        created = True
     except IndexCorruptedError as exc:
         raise ToolError(str(exc)) from exc
-    else:
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+
+    try:
+        if created:
+            return index_repository(store, resolved_repo_path)
         return initialized_result(
             str(resolved_repo_path),
             str(store.index_dir),
             created=False,
         )
-
-    try:
-        return index_repository(store, resolved_repo_path)
-    except IndexPartialFailureError as exc:
-        raise ToolError(str(exc)) from exc
+    finally:
+        store.close()
 
 
 @mcp.tool(
@@ -88,6 +92,8 @@ def reindex_file(repo_path: str, file_path: str) -> dict[str, object]:
         return reindex_single_file(store, cleaned_file_path, store.repo_path)
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
+    finally:
+        store.close()
 
 
 @mcp.tool(
@@ -121,6 +127,34 @@ def delete_file_from_index(repo_path: str, file_path: str) -> dict[str, object]:
         return delete_indexed_file(store, cleaned_file_path, store.repo_path)
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
+    finally:
+        store.close()
+
+
+@mcp.tool(
+    description=(
+        "Permanently remove a repository's complete local index after explicit "
+        "user approval. Pass confirm=true only after receiving that approval. "
+        "This tool never recreates the index; call index_repo separately if a "
+        "new index is wanted."
+    )
+)
+def remove_index(repo_path: str, confirm: bool = False) -> dict[str, object]:
+    if confirm is not True:
+        raise ToolError(
+            "remove_index requires explicit user approval and confirm=true."
+        )
+
+    try:
+        resolved_repo_path = validate_repo_path(repo_path)
+        removed_index_path = IndexStore.remove_index(resolved_repo_path)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+
+    return removed_index_result(
+        str(resolved_repo_path),
+        str(removed_index_path),
+    )
 
 
 @mcp.tool(
@@ -162,4 +196,7 @@ def get_index_status(repo_path: str) -> dict[str, object]:
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
 
-    return get_repository_index_status(store, store.repo_path)
+    try:
+        return get_repository_index_status(store, store.repo_path)
+    finally:
+        store.close()

@@ -18,6 +18,7 @@ __all__ = [
     "PartialFailureResult",
     "ReindexedResult",
     "ReindexResult",
+    "RemovedIndexResult",
     "deleted_result",
     "file_not_found_result",
     "hash_failed_result",
@@ -26,6 +27,7 @@ __all__ = [
     "not_indexable_result",
     "partial_failure_result",
     "reindexed_result",
+    "removed_index_result",
 ]
 
 
@@ -109,13 +111,19 @@ class HashFailedResult(TypedDict):
     message: str
 
 
+class RemovedIndexResult(TypedDict):
+    status: Literal["removed"]
+    repo_path: str
+    index_path: str
+
+
 ReindexResult = (
     ReindexedResult
     | FileNotFoundResult
     | NotIndexableResult
     | HashFailedResult
 )
-IndexRepoResult = InitializedResult
+IndexRepoResult = InitializedResult | PartialFailureResult
 
 
 def initialized_result(
@@ -233,4 +241,12 @@ def hash_failed_result(relative_path: str) -> HashFailedResult:
         "relative_path": relative_path,
         "retryable": True,
         "message": "File changed during hashing; retry after the write completes",
+    }
+
+
+def removed_index_result(repo_path: str, index_path: str) -> RemovedIndexResult:
+    return {
+        "status": "removed",
+        "repo_path": repo_path,
+        "index_path": index_path,
     }

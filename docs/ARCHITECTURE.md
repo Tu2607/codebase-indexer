@@ -171,8 +171,28 @@ path inside the repository, then removes all chunks with that relative path. It
 does not inspect file content or eligibility. A rename is represented as two
 explicit operations: delete the old path, then reindex the new path.
 
-A corrupted index is reported rather than repaired implicitly. A future
-explicit rebuild workflow will own destructive recovery.
+A corrupted index is reported rather than repaired implicitly. Destructive
+recovery is composed from two explicit operations: user-approved
+`remove_index`, followed by a separate `index_repo` call.
+
+## Store resource lifecycle
+
+Each `IndexStore` owns one Chroma `PersistentClient` reference and must close it
+after its synchronous operation completes or fails. MCP handlers use `finally`
+blocks so successful results, expected errors, and unexpected orchestration
+failures all release their store. Collection lookup and creation failures also
+close a client that was already created.
+
+This ownership rule releases Chroma's shared per-path system and SQLite
+resources before an index directory can be removed and recreated in the same
+server process. The implementation uses the public per-client `close()` API;
+it does not clear Chroma's process-wide system cache.
+
+`remove_index` is deliberately filesystem-only and does not open Chroma. With
+explicit confirmation it removes the exact non-symlinked `.codebase-index`
+directory, regardless of whether its contents are healthy or corrupted. It
+never calls `index_repo`, and v0 does not add backup, rollback, locking, or
+concurrent-operation support.
 
 ## Deliberate non-goals for v0
 

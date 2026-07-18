@@ -7,7 +7,6 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 import codebase_indexer.server as server
-from codebase_indexer.indexer import IndexPartialFailureError
 from codebase_indexer.index_store import IndexCorruptedError, IndexNotInitializedError
 
 
@@ -44,6 +43,7 @@ def test_index_repo_creates_new_store_and_delegates_to_indexer(monkeypatch, tmp_
     index_store_class.open_existing.assert_called_once_with(tmp_path.resolve())
     index_store_class.assert_called_once_with(tmp_path.resolve())
     orchestrator.assert_called_once_with(store, tmp_path.resolve())
+    store.close.assert_called_once_with()
 
 
 def test_index_repo_returns_without_walking_healthy_existing_index(
@@ -66,16 +66,17 @@ def test_index_repo_returns_without_walking_healthy_existing_index(
     }
     open_existing.assert_called_once_with(tmp_path.resolve())
     orchestrator.assert_not_called()
+    store.close.assert_called_once_with()
 
 
 def test_index_repo_converts_corrupted_index_error_to_tool_error(
     monkeypatch,
     tmp_path,
 ):
-    open_existing = Mock(side_effect=IndexCorruptedError("run rebuild_index"))
+    open_existing = Mock(side_effect=IndexCorruptedError("run remove_index"))
     monkeypatch.setattr(server.IndexStore, "open_existing", open_existing)
 
-    with pytest.raises(ToolError, match="rebuild_index"):
+    with pytest.raises(ToolError, match="remove_index"):
         server.index_repo(str(tmp_path))
 
     open_existing.assert_called_once_with(tmp_path.resolve())
@@ -110,7 +111,21 @@ def test_index_repo_propagates_unexpected_open_existing_error(monkeypatch, tmp_p
         server.index_repo(str(tmp_path))
 
 
-def test_index_repo_converts_partial_failure_to_tool_error(monkeypatch, tmp_path):
+def test_index_repo_converts_plain_open_existing_value_error_to_tool_error(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        server.IndexStore,
+        "open_existing",
+        Mock(side_effect=ValueError("repository disappeared")),
+    )
+
+    with pytest.raises(ToolError, match="repository disappeared"):
+        server.index_repo(str(tmp_path))
+
+
+def test_index_repo_returns_partial_failure(monkeypatch, tmp_path):
     store = Mock()
     store.index_dir = tmp_path / ".codebase-index"
     index_store_class = Mock(return_value=store)
@@ -118,14 +133,49 @@ def test_index_repo_converts_partial_failure_to_tool_error(monkeypatch, tmp_path
         side_effect=IndexNotInitializedError("not initialized")
     )
     monkeypatch.setattr(server, "IndexStore", index_store_class)
-    error = IndexPartialFailureError('{"status": "partial_failure"}')
-    orchestrator = Mock(side_effect=error)
+    orchestrator = Mock(
+        return_value={
+            "status": "partial_failure",
+            "repo_path": str(tmp_path.resolve()),
+            "index_path": str(store.index_dir),
+            "files_indexed": 1,
+            "chunks_indexed": 1,
+            "files_skipped": 0,
+            "files_failed": 1,
+            "failures": [
+                {"relative_path": "broken.py", "reason": "file disappeared"}
+            ],
+        }
+    )
     monkeypatch.setattr(server, "index_repository", orchestrator)
 
-    with pytest.raises(ToolError, match="partial_failure"):
+    result = server.index_repo(str(tmp_path))
+
+    assert result == orchestrator.return_value
+    orchestrator.assert_called_once_with(store, tmp_path.resolve())
+    store.close.assert_called_once_with()
+
+
+def test_index_repo_closes_new_store_after_unexpected_indexing_error(
+    monkeypatch,
+    tmp_path,
+):
+    store = Mock()
+    index_store_class = Mock(return_value=store)
+    index_store_class.open_existing = Mock(
+        side_effect=IndexNotInitializedError("not initialized")
+    )
+    monkeypatch.setattr(server, "IndexStore", index_store_class)
+    monkeypatch.setattr(
+        server,
+        "index_repository",
+        Mock(side_effect=RuntimeError("indexing failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="indexing failed"):
         server.index_repo(str(tmp_path))
 
-    orchestrator.assert_called_once_with(store, tmp_path.resolve())
+    store.close.assert_called_once_with()
 
 
 def test_reindex_file_wires_store_and_orchestrator(monkeypatch, tmp_path):
@@ -148,6 +198,7 @@ def test_reindex_file_wires_store_and_orchestrator(monkeypatch, tmp_path):
     assert result == orchestrator.return_value
     open_existing.assert_called_once_with(tmp_path.resolve())
     orchestrator.assert_called_once_with(store, "module.py", tmp_path.resolve())
+    store.close.assert_called_once_with()
 
 
 @pytest.mark.parametrize("error_message", ["run index_repo", "index disappeared"])
@@ -169,11 +220,11 @@ def test_reindex_file_converts_corrupted_index_error_to_tool_error(
     monkeypatch,
     tmp_path,
 ):
-    error = IndexCorruptedError("run rebuild_index")
+    error = IndexCorruptedError("run remove_index")
     open_existing = Mock(side_effect=error)
     monkeypatch.setattr(server.IndexStore, "open_existing", open_existing)
 
-    with pytest.raises(ToolError, match="rebuild_index"):
+    with pytest.raises(ToolError, match="remove_index"):
         server.reindex_file(str(tmp_path), "module.py")
 
     open_existing.assert_called_once_with(tmp_path.resolve())
@@ -273,6 +324,8 @@ def test_reindex_file_does_not_swallow_unexpected_orchestrator_errors(
     with pytest.raises(RuntimeError, match="unexpected failure"):
         server.reindex_file(str(tmp_path), "module.py")
 
+    store.close.assert_called_once_with()
+
 
 def test_delete_file_from_index_wires_store_and_orchestrator(monkeypatch, tmp_path):
     store = Mock()
@@ -292,6 +345,7 @@ def test_delete_file_from_index_wires_store_and_orchestrator(monkeypatch, tmp_pa
     assert result == orchestrator.return_value
     open_existing.assert_called_once_with(tmp_path.resolve())
     orchestrator.assert_called_once_with(store, "module.py", tmp_path.resolve())
+    store.close.assert_called_once_with()
 
 
 @pytest.mark.parametrize("repo_path", [None, "", " ", "missing"])
@@ -331,7 +385,7 @@ def test_delete_file_from_index_strips_file_path(monkeypatch, tmp_path):
     "error",
     [
         IndexNotInitializedError("run index_repo"),
-        IndexCorruptedError("run rebuild_index"),
+        IndexCorruptedError("run remove_index"),
         ValueError("corrupt metadata"),
     ],
 )
@@ -380,6 +434,8 @@ def test_delete_file_from_index_does_not_swallow_unexpected_errors(
     with pytest.raises(RuntimeError, match="delete failed"):
         server.delete_file_from_index(str(tmp_path), "module.py")
 
+    store.close.assert_called_once_with()
+
 
 def test_get_index_status_wires_store_and_orchestrator(monkeypatch, tmp_path):
     store = Mock()
@@ -393,6 +449,7 @@ def test_get_index_status_wires_store_and_orchestrator(monkeypatch, tmp_path):
     assert result == {"status": "clean"}
     open_existing.assert_called_once_with(tmp_path.resolve())
     orchestrator.assert_called_once_with(store, tmp_path.resolve())
+    store.close.assert_called_once_with()
 
 
 @pytest.mark.parametrize("repo_path", [None, "", " ", "missing"])
@@ -405,7 +462,7 @@ def test_get_index_status_rejects_invalid_repository_path(repo_path):
     "error",
     [
         IndexNotInitializedError("run index_repo"),
-        IndexCorruptedError("run rebuild_index"),
+        IndexCorruptedError("run remove_index"),
         ValueError("corrupt metadata"),
     ],
 )
@@ -432,6 +489,72 @@ def test_get_index_status_does_not_swallow_unexpected_errors(monkeypatch, tmp_pa
 
     with pytest.raises(RuntimeError, match="status failed"):
         server.get_index_status(str(tmp_path))
+
+    store.close.assert_called_once_with()
+
+
+def test_remove_index_requires_confirmation_before_validation(monkeypatch):
+    remove = Mock()
+    monkeypatch.setattr(server.IndexStore, "remove_index", remove)
+
+    with pytest.raises(ToolError, match="confirm=true"):
+        server.remove_index("missing", confirm=False)
+
+    remove.assert_not_called()
+
+
+@pytest.mark.parametrize("confirm", [1, "true", [], None])
+def test_remove_index_rejects_non_boolean_confirmation(monkeypatch, confirm):
+    remove = Mock()
+    monkeypatch.setattr(server.IndexStore, "remove_index", remove)
+
+    with pytest.raises(ToolError, match="confirm=true"):
+        server.remove_index("unused", confirm=confirm)
+
+    remove.assert_not_called()
+
+
+def test_remove_index_delegates_and_returns_result(monkeypatch, tmp_path):
+    index_path = tmp_path / ".codebase-index"
+    remove = Mock(return_value=index_path)
+    monkeypatch.setattr(server.IndexStore, "remove_index", remove)
+
+    result = server.remove_index(f" {tmp_path} ", confirm=True)
+
+    assert result == {
+        "status": "removed",
+        "repo_path": str(tmp_path.resolve()),
+        "index_path": str(index_path),
+    }
+    remove.assert_called_once_with(tmp_path.resolve())
+
+
+@pytest.mark.parametrize("repo_path", [None, "", " ", "missing"])
+def test_remove_index_rejects_invalid_repository_path(repo_path):
+    with pytest.raises(ToolError, match="repo_path"):
+        server.remove_index(repo_path, confirm=True)
+
+
+def test_remove_index_converts_expected_removal_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        server.IndexStore,
+        "remove_index",
+        Mock(side_effect=ValueError("no index to remove")),
+    )
+
+    with pytest.raises(ToolError, match="no index to remove"):
+        server.remove_index(str(tmp_path), confirm=True)
+
+
+def test_remove_index_does_not_swallow_filesystem_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        server.IndexStore,
+        "remove_index",
+        Mock(side_effect=OSError("permission denied")),
+    )
+
+    with pytest.raises(OSError, match="permission denied"):
+        server.remove_index(str(tmp_path), confirm=True)
 
 
 def test_fastmcp_dispatches_reindex_file_for_empty_indexable_file(tmp_path):
@@ -540,6 +663,48 @@ def test_fastmcp_dispatches_get_index_status_without_mutation(tmp_path):
     assert store.collection_count() == 0
 
 
+def test_fastmcp_remove_then_index_repo_recreates_fresh_index(tmp_path):
+    from codebase_indexer.index_store import IndexStore
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    original = IndexStore(repo_path)
+    original.collection.add(
+        ids=["old"],
+        embeddings=[[0.1]],
+        documents=["old"],
+        metadatas=[{"relative_path": "old.py", "file_hash": "old-hash"}],
+    )
+    original.close()
+
+    status = asyncio.run(
+        server.mcp.call_tool("get_index_status", {"repo_path": str(repo_path)})
+    )
+
+    assert json.loads(status.content[0].text)["indexed_chunks"] == 1
+
+    removed = asyncio.run(
+        server.mcp.call_tool(
+            "remove_index",
+            {"repo_path": str(repo_path), "confirm": True},
+        )
+    )
+
+    assert json.loads(removed.content[0].text)["status"] == "removed"
+    assert not (repo_path / ".codebase-index").exists()
+
+    initialized = asyncio.run(
+        server.mcp.call_tool("index_repo", {"repo_path": str(repo_path)})
+    )
+
+    assert json.loads(initialized.content[0].text)["status"] == "initialized"
+    fresh = IndexStore.open_existing(repo_path)
+    try:
+        assert fresh.collection_count() == 0
+    finally:
+        fresh.close()
+
+
 def test_fastmcp_returns_error_for_uninitialized_repository(tmp_path):
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
@@ -586,3 +751,8 @@ def test_server_tool_signatures_use_explicit_repo_path():
     assert list(inspect.signature(server.get_index_status).parameters) == [
         "repo_path"
     ]
+    assert list(inspect.signature(server.remove_index).parameters) == [
+        "repo_path",
+        "confirm",
+    ]
+    assert inspect.signature(server.remove_index).parameters["confirm"].default is False

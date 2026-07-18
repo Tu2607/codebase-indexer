@@ -8,6 +8,7 @@ from codebase_indexer.results import (
     partial_failure_result,
     not_indexable_result,
     reindexed_result,
+    removed_index_result,
 )
 
 
@@ -109,6 +110,17 @@ def test_index_status_result_reports_changes_when_errors_exist():
     assert result["status"] == "changes_detected"
 
 
+def test_removed_index_result_returns_plain_dict():
+    result = removed_index_result("/repo", "/repo/.codebase-index")
+
+    assert type(result) is dict
+    assert result == {
+        "status": "removed",
+        "repo_path": "/repo",
+        "index_path": "/repo/.codebase-index",
+    }
+
+
 def test_initialized_result_with_created_true_includes_walk_counts():
     result = initialized_result(
         "/repo",
@@ -192,6 +204,7 @@ def test_results_public_surface():
         "PartialFailureResult",
         "ReindexedResult",
         "ReindexResult",
+        "RemovedIndexResult",
         "deleted_result",
         "file_not_found_result",
         "hash_failed_result",
@@ -200,6 +213,7 @@ def test_results_public_surface():
         "not_indexable_result",
         "partial_failure_result",
         "reindexed_result",
+        "removed_index_result",
     ]
 
 
@@ -215,6 +229,7 @@ def test_result_statuses_are_unique_discriminators():
             {"relative_path": "file.py", "reason": "error"}
         ])["status"],
         partial_failure_result("/repo", "/index", 0, 0, 0, [])["status"],
+        removed_index_result("/repo", "/index")["status"],
     }
 
     assert results_by_status == {
@@ -226,6 +241,7 @@ def test_result_statuses_are_unique_discriminators():
         "initialized",
         "changes_detected",
         "partial_failure",
+        "removed",
     }
 
 

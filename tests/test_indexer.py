@@ -1,13 +1,10 @@
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 import threading
 
-import pytest
-
 import codebase_indexer.indexer as indexer
 from codebase_indexer.hashing import FileChangedDuringHashingError, hash_file
-from codebase_indexer.indexer import IndexPartialFailureError, index_repository
+from codebase_indexer.indexer import index_repository
 
 
 @dataclass
@@ -37,10 +34,6 @@ def _make_repo(tmp_path, files):
         file_path.write_text(content, encoding="utf-8")
     repo_path.mkdir(exist_ok=True)
     return repo_path
-
-
-def _payload_from_error(exc_info):
-    return json.loads(str(exc_info.value))
 
 
 def test_index_repository_indexes_eligible_files_and_returns_counts(tmp_path):
@@ -113,15 +106,14 @@ def test_index_repository_records_preparation_failure_and_continues(
 
     monkeypatch.setattr(indexer, "hash_file", fail_for_broken_file)
 
-    with pytest.raises(IndexPartialFailureError) as exc_info:
-        index_repository(store, repo_path)
+    result = index_repository(store, repo_path)
 
-    payload = _payload_from_error(exc_info)
-    assert payload["files_indexed"] == 1
-    assert payload["chunks_indexed"] == 1
-    assert payload["files_skipped"] == 0
-    assert payload["files_failed"] == 1
-    assert payload["failures"] == [
+    assert result["status"] == "partial_failure"
+    assert result["files_indexed"] == 1
+    assert result["chunks_indexed"] == 1
+    assert result["files_skipped"] == 0
+    assert result["files_failed"] == 1
+    assert result["failures"] == [
         {"relative_path": "src/broken.py", "reason": "file disappeared"}
     ]
     assert store.upserted_relative_paths == ["src/working.py"]
@@ -139,11 +131,9 @@ def test_index_repository_records_file_changed_during_hashing(
 
     monkeypatch.setattr(indexer, "hash_file", fail_hashing)
 
-    with pytest.raises(IndexPartialFailureError) as exc_info:
-        index_repository(store, repo_path)
+    result = index_repository(store, repo_path)
 
-    payload = _payload_from_error(exc_info)
-    assert payload["failures"] == [
+    assert result["failures"] == [
         {"relative_path": "changed.py", "reason": "changed during hashing"}
     ]
 
@@ -160,13 +150,11 @@ def test_index_repository_records_permission_failure_during_preparation(
 
     monkeypatch.setattr(indexer, "hash_file", fail_hashing)
 
-    with pytest.raises(IndexPartialFailureError) as exc_info:
-        index_repository(store, repo_path)
+    result = index_repository(store, repo_path)
 
-    payload = _payload_from_error(exc_info)
-    assert payload["files_indexed"] == 0
-    assert payload["chunks_indexed"] == 0
-    assert payload["failures"] == [
+    assert result["files_indexed"] == 0
+    assert result["chunks_indexed"] == 0
+    assert result["failures"] == [
         {"relative_path": "locked.py", "reason": "permission denied"}
     ]
 
@@ -185,13 +173,11 @@ def test_index_repository_records_write_failure_and_indexes_remaining_files(tmp_
         fail_relative_paths={"b.py"},
     )
 
-    with pytest.raises(IndexPartialFailureError) as exc_info:
-        index_repository(store, repo_path)
+    result = index_repository(store, repo_path)
 
-    payload = _payload_from_error(exc_info)
-    assert payload["files_indexed"] == 2
-    assert payload["chunks_indexed"] == 2
-    assert payload["failures"] == [
+    assert result["files_indexed"] == 2
+    assert result["chunks_indexed"] == 2
+    assert result["failures"] == [
         {"relative_path": "b.py", "reason": "index write failed: embedding error"}
     ]
     assert set(store.upserted_relative_paths) == {"a.py", "c.py"}
@@ -211,14 +197,12 @@ def test_index_repository_sorts_failures_by_relative_path(tmp_path):
         fail_relative_paths={"z.py", "a.py", "m.py"},
     )
 
-    with pytest.raises(IndexPartialFailureError) as exc_info:
-        index_repository(store, repo_path)
+    result = index_repository(store, repo_path)
 
-    payload = _payload_from_error(exc_info)
-    assert payload["files_indexed"] == 0
-    assert payload["chunks_indexed"] == 0
-    assert payload["files_failed"] == 3
-    assert [failure["relative_path"] for failure in payload["failures"]] == [
+    assert result["files_indexed"] == 0
+    assert result["chunks_indexed"] == 0
+    assert result["files_failed"] == 3
+    assert [failure["relative_path"] for failure in result["failures"]] == [
         "a.py",
         "m.py",
         "z.py",

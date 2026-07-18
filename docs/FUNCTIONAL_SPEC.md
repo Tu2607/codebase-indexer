@@ -16,7 +16,7 @@ The tool surface is registered up front, but implementation is incremental.
 | `delete_file_from_index` | Implemented | Explicitly removes all records for one path. |
 | `search_repo_context` | Scaffolded | Currently raises a FastMCP `ToolError`. |
 | `get_index_status` | Implemented | Read-only report of paths needing reindex or deletion. |
-| `rebuild_index` | Reserved | Not registered or implemented in v0. |
+| `remove_index` | Implemented | Removes the complete local index after explicit confirmation. |
 
 [`steps/`](steps/) records completed work and upcoming implementation slices.
 Update this table when a scaffold becomes usable.
@@ -89,8 +89,9 @@ For `created: false`, only `status`, `repo_path`, `index_path`, and `created`
 are present.
 
 Partial-failure details contain `relative_path` and `reason`, alongside the
-successful file, chunk, skip, and failure counts. At the MCP boundary this is
-reported as a `ToolError` carrying the structured failure information.
+successful file, chunk, skip, and failure counts. This is returned as a normal
+structured result with `status: "partial_failure"`; the affected paths remain
+available for targeted recovery with `reindex_file`.
 
 ## `reindex_file`
 
@@ -216,6 +217,37 @@ The current index has no file manifest. An eligible empty file produces no
 chunks, so status conservatively reports it as `not_indexed` on each call.
 Reindexing it is safe and idempotent; file-level manifest storage is deferred.
 
+## `remove_index`
+
+`remove_index(repo_path: str, confirm: bool = False) -> dict`
+
+This tool permanently removes the complete repository-local `.codebase-index`
+directory. It may remove a healthy, corrupted, incomplete, or otherwise
+unusable index, but only when `confirm` is explicitly `true`. The calling LLM
+must obtain user approval before passing that confirmation.
+
+The tool refuses an absent index, a symlinked index path, or an index path that
+is not a directory. It removes only the exact index directory inside the
+validated repository and never recreates an index automatically.
+
+```json
+{
+  "status": "removed",
+  "repo_path": "/absolute/repository",
+  "index_path": "/absolute/repository/.codebase-index"
+}
+```
+
+Creating a replacement remains a separate explicit action:
+
+```text
+remove_index(repo_path, confirm=true)
+index_repo(repo_path)
+```
+
+If later initialization partially fails, the partial new index remains and its
+failed paths can be retried individually with `reindex_file`.
+
 ## File-change edge cases
 
 Filesystem state can change between filtering, hashing, chunking, and writing.
@@ -237,10 +269,10 @@ Implementations should preserve these properties:
 
 ## Recovery policy
 
-No current tool performs destructive recovery. If an index is corrupted, the
-error should direct the caller to the future `rebuild_index` workflow. Until
-that workflow exists, recovery is a deliberate manual action; neither
-`index_repo` nor `reindex_file` should erase the index automatically.
+No tool repairs or replaces an index implicitly. If an index is corrupted, the
+error directs the caller to obtain user approval, call `remove_index` with
+`confirm=true`, and then make a separate `index_repo` call if a replacement is
+wanted. Neither `index_repo` nor `reindex_file` erases the index automatically.
 
 ## Completion target
 

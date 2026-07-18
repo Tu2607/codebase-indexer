@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-import json
 from pathlib import Path
 
 from . import config
@@ -13,17 +12,13 @@ from .file_finder import iter_indexable_files
 from .hashing import hash_file
 from .index_store import IndexStore
 from .results import (
-    InitializedResult,
+    IndexRepoResult,
     PartialFailureDetail,
     initialized_result,
     partial_failure_result,
 )
 
 __all__ = ["index_repository"]
-
-
-class IndexPartialFailureError(Exception):
-    """Raised when some files fail during initial indexing."""
 
 
 @dataclass(frozen=True)
@@ -54,7 +49,7 @@ def _prepare_file(
     return _PreparedFile(relative_path, chunks)
 
 
-def index_repository(store: IndexStore, repo_path: Path) -> InitializedResult:
+def index_repository(store: IndexStore, repo_path: Path) -> IndexRepoResult:
     """Prepare and index all eligible files in a newly created repository index."""
 
     resolved_repo_path = Path(repo_path).resolve()
@@ -128,7 +123,7 @@ def index_repository(store: IndexStore, repo_path: Path) -> InitializedResult:
             }
             for failure in failures
         ]
-        result = partial_failure_result(
+        return partial_failure_result(
             repo_path_string,
             index_path_string,
             files_indexed,
@@ -136,7 +131,6 @@ def index_repository(store: IndexStore, repo_path: Path) -> InitializedResult:
             skipped_count,
             failure_details,
         )
-        raise IndexPartialFailureError(json.dumps(result))
 
     return initialized_result(
         repo_path_string,

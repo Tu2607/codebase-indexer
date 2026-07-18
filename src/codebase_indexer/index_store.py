@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -36,9 +37,14 @@ class IndexStore:
         self._repo_path = resolved_repo_path
         self._index_dir = self._repo_path / DEFAULT_INDEX_DIR_NAME
         self._client = chromadb.PersistentClient(path=str(self._index_dir))
-        self._collection = self._client.get_or_create_collection(
-            name=DEFAULT_COLLECTION_NAME
-        )
+        self._closed = False
+        try:
+            self._collection = self._client.get_or_create_collection(
+                name=DEFAULT_COLLECTION_NAME
+            )
+        except Exception:
+            self.close()
+            raise
 
     @staticmethod
     def is_initialized(repo_path: str | os.PathLike[str]) -> bool:
@@ -46,6 +52,23 @@ class IndexStore:
 
         index_dir = Path(repo_path).resolve() / DEFAULT_INDEX_DIR_NAME
         return _has_chroma_database(index_dir)
+
+    @staticmethod
+    def remove_index(repo_path: str | os.PathLike[str]) -> Path:
+        """Remove the exact repository-local index directory."""
+
+        resolved_repo_path = _resolve_repo_path(repo_path)
+        index_dir = resolved_repo_path / DEFAULT_INDEX_DIR_NAME
+
+        if index_dir.is_symlink():
+            raise ValueError(f"Index path must not be a symlink: {index_dir}")
+        if not index_dir.exists():
+            raise ValueError(f"Repository has no index to remove: {resolved_repo_path}")
+        if not index_dir.is_dir():
+            raise ValueError(f"Index path must be a directory: {index_dir}")
+
+        shutil.rmtree(index_dir)
+        return index_dir
 
     @classmethod
     def open_existing(
@@ -69,8 +92,8 @@ class IndexStore:
             client = chromadb.PersistentClient(path=str(index_dir))
         except (InternalError, sqlite3.DatabaseError) as exc:
             raise IndexCorruptedError(
-                f"Index database exists but cannot be opened ({exc}); remove .codebase-index "
-                "and run index_repo until rebuild_index is available: "
+                f"Index database exists but cannot be opened ({exc}); after user "
+                "approval, call remove_index with confirm=true, then call index_repo: "
                 f"{resolved_repo_path}"
             ) from exc
 
@@ -83,18 +106,32 @@ class IndexStore:
                     embedding_function=embedding_function,
                 )
         except NotFoundError as exc:
+            client.close()
             raise IndexCorruptedError(
-                f"Index database exists but collection is missing ({exc}); remove .codebase-index "
-                "and run index_repo until rebuild_index is available: "
+                f"Index database exists but collection is missing ({exc}); after user "
+                "approval, call remove_index with confirm=true, then call index_repo: "
                 f"{resolved_repo_path}"
             ) from exc
+        except Exception:
+            client.close()
+            raise
 
         store = cls.__new__(cls)
         store._repo_path = resolved_repo_path
         store._index_dir = index_dir
         store._client = client
         store._collection = collection
+        store._closed = False
         return store
+
+    def close(self) -> None:
+        """Close this store's Chroma client once."""
+
+        if self._closed:
+            return
+
+        self._client.close()
+        self._closed = True
 
     @property
     def repo_path(self) -> Path:

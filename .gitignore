@@ -1,1 +1,10 @@
 .codebase-index/
+.DS_Store
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.venv/
+.vscode/
+*.py[cod]
+__pycache__/

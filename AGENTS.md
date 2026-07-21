@@ -1,5 +1,36 @@
 # Repository guidance
 
+## Required Index-First Workflow
+
+For every repository task that requires codebase context:
+
+1. Call `index_repo`.
+2. Call `get_index_status`.
+3. Reconcile the index:
+   - Use `reindex_file` for new or changed files.
+   - Use `delete_file_from_index` for deleted files and old rename paths.
+4. Verify the index is clean with `get_index_status`.
+5. Call `search_repo_context` with a concise feature, behavior, or symbol query.
+6. Read the returned source regions directly.
+7. Use targeted `rg`, grep, or glob searches to find definitions, callers, references, and tests.
+
+Treat index results as navigation pointers. The current working tree remains the source of truth. Avoid broad scans and whole-file reads unless the indexed pointers are insufficient.
+
+After all edits, formatting, generation, or other file-changing commands:
+
+1. Call `get_index_status`.
+2. Reindex changed files and remove deleted paths from the index.
+3. Call `get_index_status` again.
+4. Do not report completion until the index is clean. Report any unresolved indexing errors.
+
+If an approved background watcher is active, it may perform routine synchronization, but the agent must still verify clean status before searching and before completion.
+
+Required flow:
+
+index → verify/synchronize → search context → read pointers → targeted text search → make changes → verify/synchronize → complete
+
+If the indexer is unavailable or unusable, state that briefly and fall back to targeted rg, grep, glob, and direct source reads.
+
 ## Working rules
 
 - Focus on the happy path. The simplest implementation that satisfies the

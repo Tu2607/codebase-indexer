@@ -121,6 +121,14 @@ pipenv run pytest tests/test_server.py -k reindex
 pipenv run pytest
 ```
 
+End-to-end lifecycle smoke tests live in `tests/test_smoke.py` under the
+`smoke` marker and are excluded from the default run because they load the
+real embedder. Run them on demand and before tagging a release:
+
+```bash
+pipenv run pytest -m smoke
+```
+
 There is currently no packaged build step or runnable CLI entry point. Verify
 server construction with an import when relevant:
 

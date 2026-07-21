@@ -14,7 +14,7 @@ The tool surface is registered up front, but implementation is incremental.
 | `index_repo` | Implemented | Creates an absent index; a healthy existing index is a no-op. |
 | `reindex_file` | Implemented | Replaces records for one existing, indexable path. |
 | `delete_file_from_index` | Implemented | Explicitly removes all records for one path. |
-| `search_repo_context` | Scaffolded | Currently raises a FastMCP `ToolError`. |
+| `search_repo_context` | Implemented | Returns ordered semantic source-location pointers. |
 | `get_index_status` | Implemented | Read-only report of paths needing reindex or deletion. |
 | `remove_index` | Implemented | Removes the complete local index after explicit confirmation. |
 
@@ -156,26 +156,49 @@ The operation is idempotent. A valid path with no indexed chunks returns
 
 For a rename, delete the old path and then reindex the new path.
 
-## Planned search behavior
+## `search_repo_context`
 
-`search_repo_context(repo_path: str, query: str, max_results: int = 5,
+`search_repo_context(repo_path: str, query: str, max_results: int = 10,
 include_stale: bool = False) -> list[dict]`
 
-Each match should include:
+Search is a semantic locator for narrowing subsequent filesystem reads. ChromaDB
+embeds the validated query and returns the nearest indexed chunks in relevance
+order. The tool exposes the source locations associated with those chunks; it
+does not return embedding vectors or attempt to replace direct inspection of the
+files on disk.
 
-- Absolute and repository-relative file paths.
-- One-based start and end line numbers.
-- Chunk content.
-- Vector distance or a clearly defined score.
-- The indexed file hash and a stale indicator.
+Each match has this shape:
+
+```json
+{
+  "relative_path": "src/example.py",
+  "start_line": 1,
+  "end_line": 80,
+  "stale": false
+}
+```
+
+Line numbers are one-based. Result order preserves ChromaDB's nearest-match
+ordering. V0 does not return absolute paths, chunk content, vector distances,
+embedding vectors, or indexed file hashes. The repository path supplied to the
+tool and each result's relative path are sufficient for callers to read the
+authoritative source region directly.
 
 For each candidate, search compares the stored hash with the current file's
-byte-level SHA-256 hash. Missing or changed files are stale. Search must never
-repair, reindex, or delete content as a side effect.
+byte-level SHA-256 hash. Missing, unreadable, or changed files are stale. Hashes
+are memoized by relative path only for the duration of one search call. Search
+must never repair, reindex, or delete content as a side effect.
 
 When `include_stale` is false, stale matches should be omitted. When it is true,
 they may be returned but must be unmistakably marked. Results remain discovery
-hints; callers read the file itself before editing.
+hints; callers read the file itself before editing. Search asks ChromaDB for
+exactly `max_results` candidates, so filtering may produce a shorter result list.
+It does not over-fetch in v0.
+
+Every candidate must contain valid repository-relative path, line-range, and
+indexed-hash metadata. A malformed candidate or a stored path that is unsafe or
+not normalized fails the complete call; search never returns partial pointers
+that could misdirect the caller.
 
 ## `get_index_status`
 

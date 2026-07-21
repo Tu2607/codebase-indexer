@@ -17,7 +17,7 @@ MCP client
     v
 server.py (tool definitions and error translation)
     |
-    +--> indexer.py / reindexer.py (workflows)
+    +--> indexer.py / reindexer.py / searcher.py (workflows)
     |        |
     |        +--> file_finder.py
     |        +--> hashing.py
@@ -40,6 +40,7 @@ src/codebase_indexer/
   index_store.py
   indexer.py
   reindexer.py
+  searcher.py
   results.py
   path_utils.py
   repo_id.py
@@ -59,6 +60,8 @@ src/codebase_indexer/
 - `indexer.py` orchestrates initialization with bounded preparation workers,
   serialized ChromaDB writes, batching, and partial-failure reporting.
 - `reindexer.py` implements the single-file update workflow.
+- `searcher.py` validates nearest-match metadata, checks staleness, and returns
+  ordered source-location pointers without mutating the index.
 - `results.py` defines structured dictionary contracts and constructors.
 - `path_utils.py` validates and normalizes repository and file paths.
 - `repo_id.py` provides stable repository identity used by stored records.

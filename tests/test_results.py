@@ -9,6 +9,7 @@ from codebase_indexer.results import (
     not_indexable_result,
     reindexed_result,
     removed_index_result,
+    search_match_result,
 )
 
 
@@ -121,6 +122,18 @@ def test_removed_index_result_returns_plain_dict():
     }
 
 
+def test_search_match_result_returns_plain_dict():
+    result = search_match_result("src/module.py", 4, 12, stale=False)
+
+    assert type(result) is dict
+    assert result == {
+        "relative_path": "src/module.py",
+        "start_line": 4,
+        "end_line": 12,
+        "stale": False,
+    }
+
+
 def test_initialized_result_with_created_true_includes_walk_counts():
     result = initialized_result(
         "/repo",
@@ -205,6 +218,7 @@ def test_results_public_surface():
         "ReindexedResult",
         "ReindexResult",
         "RemovedIndexResult",
+        "SearchMatch",
         "deleted_result",
         "file_not_found_result",
         "hash_failed_result",
@@ -214,6 +228,7 @@ def test_results_public_surface():
         "partial_failure_result",
         "reindexed_result",
         "removed_index_result",
+        "search_match_result",
     ]
 
 

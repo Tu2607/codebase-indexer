@@ -171,6 +171,23 @@ class IndexStore:
         result = self._collection.get(include=["metadatas"])
         return result["metadatas"] or []
 
+    def query_chunks(
+        self,
+        query_text: str,
+        n_results: int,
+    ) -> list[dict[str, object] | None]:
+        """Return ordered chunk metadata for one semantic query."""
+
+        result = self._collection.query(
+            query_texts=[query_text],
+            n_results=n_results,
+            include=["metadatas"],
+        )
+        metadatas = result["metadatas"]
+        if not metadatas or not metadatas[0]:
+            return []
+        return list(metadatas[0])
+
     def upsert_chunks(self, chunks: list[TextChunk]) -> None:
         """Add or replace a collection of text chunks by ID."""
 

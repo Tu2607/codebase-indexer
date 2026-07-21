@@ -28,6 +28,9 @@ class FakeEmbeddingFunction:
     def __call__(self, input: list[str]) -> list[list[float]]:
         return [[0.0] * EMBEDDING_DIMENSIONS for _ in input]
 
+    def embed_query(self, input: list[str]) -> list[list[float]]:
+        return self(input)
+
 
 def _embedding(value: float) -> list[float]:
     return [value] * EMBEDDING_DIMENSIONS
@@ -348,6 +351,64 @@ def test_get_indexed_file_metadata_returns_empty_list_for_empty_collection(tmp_p
     store = IndexStore(tmp_path)
 
     assert store.get_indexed_file_metadata() == []
+
+
+def test_query_chunks_returns_ordered_metadata_for_one_query(tmp_path):
+    original = IndexStore(tmp_path)
+    original.collection.add(
+        ids=["nearest", "farther"],
+        embeddings=[_embedding(0.0), _embedding(1.0)],
+        documents=["nearest", "farther"],
+        metadatas=[
+            {"relative_path": "nearest.py"},
+            {"relative_path": "farther.py"},
+        ],
+    )
+    original.close()
+    store = IndexStore.open_existing(
+        tmp_path,
+        embedding_function=FakeEmbeddingFunction(),
+    )
+    try:
+        result = store.query_chunks("query", 10)
+    finally:
+        store.close()
+
+    assert result == [
+        {"relative_path": "nearest.py"},
+        {"relative_path": "farther.py"},
+    ]
+
+
+def test_query_chunks_returns_empty_list_for_empty_collection(tmp_path):
+    original = IndexStore(tmp_path)
+    original.close()
+    store = IndexStore.open_existing(
+        tmp_path,
+        embedding_function=FakeEmbeddingFunction(),
+    )
+    try:
+        result = store.query_chunks("query", 10)
+    finally:
+        store.close()
+
+    assert result == []
+
+
+def test_query_chunks_requests_only_metadata():
+    store = IndexStore.__new__(IndexStore)
+    store._collection = Mock(
+        **{"query.return_value": {"metadatas": [[{"relative_path": "module.py"}]]}}
+    )
+
+    result = store.query_chunks("module", 10)
+
+    assert result == [{"relative_path": "module.py"}]
+    store._collection.query.assert_called_once_with(
+        query_texts=["module"],
+        n_results=10,
+        include=["metadatas"],
+    )
 
 
 def test_upsert_chunks_adds_and_replaces_chunks(tmp_path):

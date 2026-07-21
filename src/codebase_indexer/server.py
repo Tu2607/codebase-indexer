@@ -1,22 +1,17 @@
-from typing import NoReturn
-
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
-from .config import SERVER_NAME
+from .config import DEFAULT_SEARCH_MAX_RESULTS, SERVER_NAME
 from .deleter import delete_indexed_file
 from .indexer import index_repository
 from .index_store import IndexCorruptedError, IndexNotInitializedError, IndexStore
 from .path_utils import validate_repo_path
 from .reindexer import reindex_single_file
-from .results import initialized_result, removed_index_result
+from .results import SearchMatch, initialized_result, removed_index_result
+from .searcher import SearchMetadataError, search_repository
 from .status import get_repository_index_status
 
 mcp = FastMCP(SERVER_NAME)
-
-
-def _raise_not_implemented(tool_name: str) -> NoReturn:
-    raise ToolError(f"{tool_name} is scaffolded but not implemented yet.")
 
 
 @mcp.tool(
@@ -168,10 +163,41 @@ def remove_index(repo_path: str, confirm: bool = False) -> dict[str, object]:
 def search_repo_context(
     repo_path: str,
     query: str,
-    max_results: int = 5,
+    max_results: int = DEFAULT_SEARCH_MAX_RESULTS,
     include_stale: bool = False,
-) -> list[dict[str, object]]:
-    _raise_not_implemented("search_repo_context")
+) -> list[SearchMatch]:
+    try:
+        resolved_repo_path = validate_repo_path(repo_path)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+
+    cleaned_query = query.strip() if query else ""
+    if not cleaned_query:
+        raise ToolError("query is required.")
+    if max_results < 1:
+        raise ToolError("max_results must be at least 1.")
+
+    try:
+        store = IndexStore.open_existing(resolved_repo_path)
+    except IndexNotInitializedError as exc:
+        raise ToolError(str(exc)) from exc
+    except IndexCorruptedError as exc:
+        raise ToolError(str(exc)) from exc
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+
+    try:
+        return search_repository(
+            store,
+            store.repo_path,
+            cleaned_query,
+            max_results,
+            include_stale,
+        )
+    except SearchMetadataError as exc:
+        raise ToolError(str(exc)) from exc
+    finally:
+        store.close()
 
 
 @mcp.tool(
@@ -200,3 +226,6 @@ def get_index_status(repo_path: str) -> dict[str, object]:
         return get_repository_index_status(store, store.repo_path)
     finally:
         store.close()
+
+if __name__ == "__main__":
+    mcp.run()

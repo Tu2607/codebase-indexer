@@ -1,4 +1,4 @@
-"""Plain dictionary result contracts for indexing and file reindexing."""
+"""Plain dictionary result contracts for MCP-facing workflows."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ __all__ = [
     "ReindexedResult",
     "ReindexResult",
     "RemovedIndexResult",
+    "SearchMatch",
     "deleted_result",
     "file_not_found_result",
     "hash_failed_result",
@@ -28,6 +29,7 @@ __all__ = [
     "partial_failure_result",
     "reindexed_result",
     "removed_index_result",
+    "search_match_result",
 ]
 
 
@@ -115,6 +117,13 @@ class RemovedIndexResult(TypedDict):
     status: Literal["removed"]
     repo_path: str
     index_path: str
+
+
+class SearchMatch(TypedDict):
+    relative_path: str
+    start_line: int
+    end_line: int
+    stale: bool
 
 
 ReindexResult = (
@@ -249,4 +258,19 @@ def removed_index_result(repo_path: str, index_path: str) -> RemovedIndexResult:
         "status": "removed",
         "repo_path": repo_path,
         "index_path": index_path,
+    }
+
+
+def search_match_result(
+    relative_path: str,
+    start_line: int,
+    end_line: int,
+    *,
+    stale: bool,
+) -> SearchMatch:
+    return {
+        "relative_path": relative_path,
+        "start_line": start_line,
+        "end_line": end_line,
+        "stale": stale,
     }

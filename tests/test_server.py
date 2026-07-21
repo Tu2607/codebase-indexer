@@ -8,6 +8,7 @@ from fastmcp.exceptions import ToolError
 
 import codebase_indexer.server as server
 from codebase_indexer.index_store import IndexCorruptedError, IndexNotInitializedError
+from codebase_indexer.searcher import SearchMetadataError
 
 
 def _patch_open_store(monkeypatch, store):
@@ -718,18 +719,102 @@ def test_fastmcp_returns_error_for_uninitialized_repository(tmp_path):
         )
 
 
+def test_search_repo_context_wires_store_and_searcher(monkeypatch, tmp_path):
+    store = Mock()
+    store.repo_path = tmp_path.resolve()
+    open_existing = _patch_open_store(monkeypatch, store)
+    matches = [
+        {
+            "relative_path": "module.py",
+            "start_line": 1,
+            "end_line": 10,
+            "stale": False,
+        }
+    ]
+    orchestrator = Mock(return_value=matches)
+    monkeypatch.setattr(server, "search_repository", orchestrator)
+
+    result = server.search_repo_context(str(tmp_path), "  module  ")
+
+    assert result == matches
+    open_existing.assert_called_once_with(tmp_path.resolve())
+    orchestrator.assert_called_once_with(store, tmp_path.resolve(), "module", 10, False)
+    store.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize("query", [None, "", "   "])
+def test_search_repo_context_rejects_empty_query(query, tmp_path):
+    with pytest.raises(ToolError, match="query is required"):
+        server.search_repo_context(str(tmp_path), query)
+
+
+@pytest.mark.parametrize("max_results", [0, -1])
+def test_search_repo_context_rejects_invalid_max_results(max_results, tmp_path):
+    with pytest.raises(ToolError, match="at least 1"):
+        server.search_repo_context(str(tmp_path), "module", max_results=max_results)
+
+
+@pytest.mark.parametrize("repo_path", [None, "", " ", "missing"])
+def test_search_repo_context_rejects_invalid_repository_path(repo_path):
+    with pytest.raises(ToolError, match="repo_path"):
+        server.search_repo_context(repo_path, "module")
+
+
 @pytest.mark.parametrize(
-    ("tool_name", "arguments"),
+    "error",
     [
-        (
-            "search_repo_context",
-            {"repo_path": "/tmp/repo", "query": "module"},
-        ),
+        IndexNotInitializedError("run index_repo"),
+        IndexCorruptedError("run remove_index"),
+        ValueError("repository disappeared"),
     ],
 )
-def test_scaffolded_index_tools_raise_tool_error(tool_name, arguments):
-    with pytest.raises(ToolError, match="scaffolded but not implemented"):
-        asyncio.run(server.mcp.call_tool(tool_name, arguments))
+def test_search_repo_context_converts_index_open_errors(
+    monkeypatch,
+    tmp_path,
+    error,
+):
+    monkeypatch.setattr(server.IndexStore, "open_existing", Mock(side_effect=error))
+
+    with pytest.raises(ToolError, match=str(error)):
+        server.search_repo_context(str(tmp_path), "module")
+
+
+def test_search_repo_context_converts_metadata_error_and_closes_store(
+    monkeypatch,
+    tmp_path,
+):
+    store = Mock()
+    store.repo_path = tmp_path.resolve()
+    _patch_open_store(monkeypatch, store)
+    monkeypatch.setattr(
+        server,
+        "search_repository",
+        Mock(side_effect=SearchMetadataError("invalid metadata")),
+    )
+
+    with pytest.raises(ToolError, match="invalid metadata"):
+        server.search_repo_context(str(tmp_path), "module")
+
+    store.close.assert_called_once_with()
+
+
+def test_search_repo_context_propagates_unexpected_error_and_closes_store(
+    monkeypatch,
+    tmp_path,
+):
+    store = Mock()
+    store.repo_path = tmp_path.resolve()
+    _patch_open_store(monkeypatch, store)
+    monkeypatch.setattr(
+        server,
+        "search_repository",
+        Mock(side_effect=RuntimeError("query failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="query failed"):
+        server.search_repo_context(str(tmp_path), "module")
+
+    store.close.assert_called_once_with()
 
 
 def test_server_tool_signatures_use_explicit_repo_path():
@@ -748,6 +833,12 @@ def test_server_tool_signatures_use_explicit_repo_path():
         "max_results",
         "include_stale",
     ]
+    assert (
+        inspect.signature(server.search_repo_context)
+        .parameters["max_results"]
+        .default
+        == 10
+    )
     assert list(inspect.signature(server.get_index_status).parameters) == [
         "repo_path"
     ]

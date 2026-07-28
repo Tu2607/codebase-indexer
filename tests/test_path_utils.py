@@ -1,7 +1,12 @@
 import pytest
 
 import codebase_indexer.path_utils as path_utils
-from codebase_indexer.path_utils import resolve_repo_file_path, validate_repo_path
+from codebase_indexer.path_utils import (
+    is_event_path_allowed,
+    resolve_event_path,
+    resolve_repo_file_path,
+    validate_repo_path,
+)
 
 
 def test_validate_repo_path_resolves_and_strips_string_path(tmp_path):
@@ -35,6 +40,32 @@ def test_validate_repo_path_rejects_file_path(tmp_path):
 
     with pytest.raises(ValueError, match="existing directory"):
         validate_repo_path(repo_path)
+
+
+def test_resolve_event_path_accepts_absolute_and_repository_relative_paths(tmp_path):
+    repo_path = tmp_path.resolve()
+
+    assert resolve_event_path("src/module.py", repo_path) == (
+        repo_path / "src" / "module.py"
+    )
+    assert resolve_event_path(str(repo_path / "module.py"), repo_path) == (
+        repo_path / "module.py"
+    )
+    assert resolve_event_path("src/../module.py", repo_path) == (
+        repo_path / "module.py"
+    )
+
+
+def test_event_path_filter_rejects_skipped_and_outside_paths(tmp_path):
+    repo_path = tmp_path.resolve()
+
+    assert is_event_path_allowed(str(repo_path / "module.py"), repo_path)
+    assert not is_event_path_allowed(
+        str(repo_path / ".codebase-index" / "data"), repo_path
+    )
+    assert not is_event_path_allowed(str(repo_path / ".git" / "index"), repo_path)
+    assert not is_event_path_allowed(str(repo_path.parent / "outside.py"), repo_path)
+    assert not is_event_path_allowed("../../outside.py", repo_path)
 
 
 def test_resolve_repo_file_path_resolves_relative_path_against_repo(tmp_path):
@@ -222,4 +253,9 @@ def test_resolve_repo_file_path_rejects_repository_root(tmp_path, file_path):
 
 
 def test_path_utils_public_surface():
-    assert path_utils.__all__ == ["resolve_repo_file_path", "validate_repo_path"]
+    assert path_utils.__all__ == [
+        "is_event_path_allowed",
+        "resolve_event_path",
+        "resolve_repo_file_path",
+        "validate_repo_path",
+    ]

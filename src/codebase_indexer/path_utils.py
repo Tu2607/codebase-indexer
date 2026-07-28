@@ -5,7 +5,14 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-__all__ = ["resolve_repo_file_path", "validate_repo_path"]
+from .config import SKIP_DIRECTORIES
+
+__all__ = [
+    "is_event_path_allowed",
+    "resolve_event_path",
+    "resolve_repo_file_path",
+    "validate_repo_path",
+]
 
 
 def validate_repo_path(repo_path: str | os.PathLike[str] | None) -> Path:
@@ -28,6 +35,28 @@ def validate_repo_path(repo_path: str | os.PathLike[str] | None) -> Path:
         )
 
     return resolved_repo_path
+
+
+def resolve_event_path(event_path: str, repo_path: Path) -> Path:
+    """Resolve an event path against an already-resolved repository path."""
+
+    path = Path(event_path)
+    if not path.is_absolute():
+        path = repo_path / path
+    return path.resolve(strict=False)
+
+
+def is_event_path_allowed(event_path: str, repo_path: Path) -> bool:
+    """Check an event against an already-resolved repository path and skips."""
+
+    path = resolve_event_path(event_path, repo_path)
+
+    try:
+        relative_path = path.relative_to(repo_path)
+    except ValueError:
+        return False
+
+    return not any(part in SKIP_DIRECTORIES for part in relative_path.parts)
 
 
 def resolve_repo_file_path(

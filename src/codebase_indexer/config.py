@@ -66,5 +66,6 @@ SKIP_DIRECTORIES = frozenset(
         ".pytest_cache",
         ".mypy_cache",
         "coverage",
+        ".claude",
     }
 )

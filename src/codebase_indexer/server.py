@@ -3,6 +3,7 @@ from fastmcp.exceptions import ToolError
 
 from .config import DEFAULT_SEARCH_MAX_RESULTS, SERVER_NAME
 from .deleter import delete_indexed_file
+from .dirty_flag import DIRTY
 from .indexer import index_repository
 from .index_store import IndexCorruptedError, IndexNotInitializedError, IndexStore
 from .path_utils import validate_repo_path
@@ -10,16 +11,72 @@ from .reindexer import reindex_single_file
 from .results import SearchMatch, initialized_result, removed_index_result
 from .searcher import SearchMetadataError, search_repository
 from .status import get_repository_index_status
+from .watcher import get_status as get_background_watcher_status
+from .watcher import is_running as is_watcher_running
+from .watcher import start as start_background_watcher
 
 mcp = FastMCP(SERVER_NAME)
 
 
 @mcp.tool(
     description=(
-        "Initialize a repository index. Call this at the beginning of a "
-        "session or when no usable index exists. If the index already exists "
-        "and is healthy, returns immediately without modifying it. For "
-        "updating individual files after edits, use reindex_file instead."
+        "Start the process-local filesystem watcher for one repository. The "
+        "watcher only marks possible changes; it never updates indexed content."
+    )
+)
+def start_watcher(repo_path: str) -> dict[str, object]:
+    try:
+        resolved_repo_path = validate_repo_path(repo_path)
+        return start_background_watcher(resolved_repo_path)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ToolError(str(exc)) from exc
+
+
+@mcp.tool(
+    description=(
+        "Read the cheap process-local watcher state without opening the index "
+        "or walking repository files."
+    )
+)
+def get_watcher_status(repo_path: str) -> dict[str, object]:
+    try:
+        resolved_repo_path = validate_repo_path(repo_path)
+        return get_background_watcher_status(resolved_repo_path)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+
+
+@mcp.tool(
+    description=(
+        "Set the process-local index dirty signal without opening the index or "
+        "walking repository files. Set false only after every known changed "
+        "path has been reconciled successfully, and inspect the returned dirty "
+        "value because a concurrent event may keep it true."
+    )
+)
+def set_index_dirty(repo_path: str, dirty: bool) -> dict[str, object]:
+    try:
+        resolved_repo_path = validate_repo_path(repo_path)
+        status = get_background_watcher_status(resolved_repo_path)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+
+    if not dirty and not status["watcher_running"]:
+        raise ToolError("Cannot clear dirty state without a running watcher.")
+
+    # Clearing relies on the documented clean-baseline, known-writer contract;
+    # unknown or concurrent writers require authoritative status reconciliation.
+    DIRTY.set(dirty)
+    status["dirty"] = DIRTY.is_set()
+    return status
+
+
+@mcp.tool(
+    description=(
+        "Create a repository index when none exists. A healthy existing index "
+        "is returned unchanged, but this tool must not refresh or repair it; "
+        "use reindex_file and delete_file_from_index for routine updates. To "
+        "rebuild an unusable index, remove it with explicit approval first."
     )
 )
 def index_repo(repo_path: str) -> dict[str, object]:
@@ -216,16 +273,36 @@ def get_index_status(repo_path: str) -> dict[str, object]:
     try:
         store = IndexStore.open_existing(resolved_repo_path)
     except IndexNotInitializedError as exc:
+        DIRTY.set()
         raise ToolError(str(exc)) from exc
     except IndexCorruptedError as exc:
+        DIRTY.set()
         raise ToolError(str(exc)) from exc
     except ValueError as exc:
+        DIRTY.set()
         raise ToolError(str(exc)) from exc
 
+    DIRTY.check_and_clear()
+
     try:
-        return get_repository_index_status(store, store.repo_path)
+        result = get_repository_index_status(store, store.repo_path)
+    except Exception:
+        DIRTY.set()
+        raise
     finally:
         store.close()
+
+    if (
+        result["files_to_reindex"]
+        or result["files_to_delete"]
+        or result["files_with_errors"]
+    ):
+        DIRTY.set()
+
+    result["watcher_running"] = is_watcher_running(resolved_repo_path)
+    result["dirty"] = DIRTY.is_set()
+    return result
+
 
 if __name__ == "__main__":
     mcp.run()

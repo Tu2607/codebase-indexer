@@ -10,6 +10,8 @@ from codebase_indexer.results import (
     reindexed_result,
     removed_index_result,
     search_match_result,
+    watcher_state_result,
+    watcher_status_result,
 )
 
 
@@ -93,6 +95,8 @@ def test_index_status_result_returns_clean_plain_dict():
         "files_to_reindex": [],
         "files_to_delete": [],
         "files_with_errors": [],
+        "watcher_running": False,
+        "dirty": False,
     }
 
 
@@ -119,6 +123,24 @@ def test_removed_index_result_returns_plain_dict():
         "status": "removed",
         "repo_path": "/repo",
         "index_path": "/repo/.codebase-index",
+    }
+
+
+def test_watcher_result_builders_return_plain_dicts():
+    assert watcher_status_result(
+        "/repo", watcher_running=False, dirty=True
+    ) == {
+        "repo_path": "/repo",
+        "watcher_running": False,
+        "dirty": True,
+    }
+    assert watcher_state_result(
+        "started", "/repo", watcher_running=True, dirty=True
+    ) == {
+        "status": "started",
+        "repo_path": "/repo",
+        "watcher_running": True,
+        "dirty": True,
     }
 
 
@@ -219,6 +241,8 @@ def test_results_public_surface():
         "ReindexResult",
         "RemovedIndexResult",
         "SearchMatch",
+        "WatcherState",
+        "WatcherStatus",
         "deleted_result",
         "file_not_found_result",
         "hash_failed_result",
@@ -229,6 +253,8 @@ def test_results_public_surface():
         "reindexed_result",
         "removed_index_result",
         "search_match_result",
+        "watcher_state_result",
+        "watcher_status_result",
     ]
 
 

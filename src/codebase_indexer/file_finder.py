@@ -13,7 +13,7 @@ from codebase_indexer.config import (
     SKIP_DIRECTORIES,
 )
 
-__all__ = ["iter_indexable_files", "should_index_file"]
+__all__ = ["is_index_candidate_path", "iter_indexable_files", "should_index_file"]
 
 
 def iter_indexable_files(repo_path: Path) -> tuple[list[tuple[Path, str]], int]:
@@ -72,19 +72,14 @@ def iter_indexable_files(repo_path: Path) -> tuple[list[tuple[Path, str]], int]:
 def should_index_file(file_path: Path, repo_path: Path) -> tuple[bool, str | None]:
     """Return whether an existing file is eligible for indexing and why not."""
 
+    rejection_reason = _candidate_rejection_reason(file_path, repo_path)
+    if rejection_reason is not None:
+        return False, rejection_reason
+
     file_stat = file_path.stat()
 
     if not stat.S_ISREG(file_stat.st_mode):
         return False, "not a regular file"
-
-    relative_path = file_path.relative_to(repo_path)
-
-    for component in relative_path.parts[:-1]:
-        if component in SKIP_DIRECTORIES:
-            return False, f"inside skipped directory: {component}"
-
-    if file_path.suffix not in INDEX_EXTENSIONS and file_path.name not in INDEX_FILENAMES:
-        return False, f"unsupported file type: {file_path.name}"
 
     if file_stat.st_size > MAX_FILE_SIZE_BYTES:
         return (
@@ -94,3 +89,21 @@ def should_index_file(file_path: Path, repo_path: Path) -> tuple[bool, str | Non
         )
 
     return True, None
+
+
+def is_index_candidate_path(file_path: Path, repo_path: Path) -> bool:
+    """Return path-level eligibility without reading filesystem state."""
+
+    return _candidate_rejection_reason(file_path, repo_path) is None
+
+
+def _candidate_rejection_reason(file_path: Path, repo_path: Path) -> str | None:
+    relative_path = file_path.relative_to(repo_path)
+    for component in relative_path.parts[:-1]:
+        if component in SKIP_DIRECTORIES:
+            return f"inside skipped directory: {component}"
+
+    if file_path.suffix not in INDEX_EXTENSIONS and file_path.name not in INDEX_FILENAMES:
+        return f"unsupported file type: {file_path.name}"
+
+    return None

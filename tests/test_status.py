@@ -48,6 +48,8 @@ def test_get_repository_index_status_returns_clean_for_matching_file(tmp_path):
         "files_to_reindex": [],
         "files_to_delete": [],
         "files_with_errors": [],
+        "watcher_running": False,
+        "dirty": False,
     }
 
 

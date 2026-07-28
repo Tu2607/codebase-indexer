@@ -12,6 +12,9 @@ The tool surface is registered up front, but implementation is incremental.
 | Tool | Status | Notes |
 | --- | --- | --- |
 | `index_repo` | Implemented | Creates an absent index; a healthy existing index is a no-op. |
+| `start_watcher` | Implemented | Starts the process-local watcher and requires a baseline scan. |
+| `get_watcher_status` | Implemented | Cheap, non-mutating watcher and dirty-bit state. |
+| `set_index_dirty` | Implemented | Maintenance override for the process-local dirty signal. |
 | `reindex_file` | Implemented | Replaces records for one existing, indexable path. |
 | `delete_file_from_index` | Implemented | Explicitly removes all records for one path. |
 | `search_repo_context` | Implemented | Returns ordered semantic source-location pointers. |
@@ -37,6 +40,7 @@ Every index-backed operation follows these rules:
 - Expected validation and index-state failures become FastMCP `ToolError`s.
   Unexpected programming or infrastructure errors are allowed to propagate.
 - Search and status operations must not mutate indexed content.
+- At most one repository watcher may run in one MCP server process.
 
 ## Index lifecycle
 
@@ -200,6 +204,73 @@ indexed-hash metadata. A malformed candidate or a stored path that is unsafe or
 not normalized fails the complete call; search never returns partial pointers
 that could misdirect the caller.
 
+## `start_watcher`
+
+`start_watcher(repo_path: str) -> dict`
+
+The tool starts one daemon worker thread that consumes synchronous
+`watchfiles.watch` events recursively at the resolved repository root. It is
+idempotent for the same path and rejects a different repository while the
+process owns a live watcher. A first start or restart sets `dirty: true`, which
+limits how far the index may be trusted but does not by itself require a
+baseline status scan.
+
+```json
+{
+  "status": "started",
+  "repo_path": "/absolute/repository",
+  "watcher_running": true,
+  "dirty": true
+}
+```
+
+The watcher filters configured skipped directories, including `.git` and
+`.codebase-index`, and shares normal discovery's extension and exact-filename
+policy. It only sets the dirty signal; it never opens or mutates the index.
+Worker failures set dirty and make later `get_watcher_status` calls fail until
+the watcher is restarted.
+
+## `get_watcher_status`
+
+`get_watcher_status(repo_path: str) -> dict`
+
+This cheap check validates the repository and reads process-local watcher
+state without opening ChromaDB or walking repository files:
+
+```json
+{
+  "repo_path": "/absolute/repository",
+  "watcher_running": true,
+  "dirty": false
+}
+```
+
+The tool fails when no live worker owns the repository, so `watcher_running` is
+always `true` in a successful response and `dirty: false` alone permits treating
+the index as a complete view. Callers reach that state through `start_watcher`
+rather than by interpreting a not-running result. A dirty read-only turn may
+still skip the full status walk by searching with `include_stale=true` and
+reading current files directly. The tool never clears the flag.
+
+## `set_index_dirty`
+
+`set_index_dirty(repo_path: str, dirty: bool) -> dict`
+
+This cheap tool validates watcher ownership and sets the process-local dirty
+signal without opening ChromaDB or walking repository files. It returns the
+same shape as `get_watcher_status`.
+
+Callers may set `dirty=false` only when the watcher was running and clean before
+the edit batch, every changed path is known, all required `reindex_file` and
+`delete_file_from_index` calls succeeded, and no external or bulk operation may
+have changed additional files. Clearing is rejected without a running watcher.
+Set `dirty=true` after uncertainty or failure. Callers must inspect the returned
+value because a concurrent watcher event may keep it true. Unknown dirty state
+and important structural changes still require `get_index_status`.
+
+This tool is a maintenance override and is not part of the routine workflow in
+[`AGENTS.md`](../AGENTS.md), which leaves the dirty bit to `get_index_status`.
+
 ## `get_index_status`
 
 `get_index_status(repo_path: str) -> dict`
@@ -227,7 +298,9 @@ in `files_with_errors` and never become deletion recommendations.
   "files_to_delete": [
     {"relative_path": "src/old.py", "reason": "missing"}
   ],
-  "files_with_errors": []
+  "files_with_errors": [],
+  "watcher_running": true,
+  "dirty": true
 }
 ```
 
@@ -239,6 +312,14 @@ reindex.
 The current index has no file manifest. An eligible empty file produces no
 chunks, so status conservatively reports it as `not_indexed` on each call.
 Reindexing it is safe and idempotent; file-level manifest storage is deferred.
+
+`get_index_status` owns the authoritative dirty-bit lifecycle. It clears the
+previous signal immediately before scanning and restores it when actions or
+errors remain. An event received during the scan sets a new signal that is
+preserved in the returned `dirty` value. A failed scan also restores the signal
+so the next turn retries. Per-file tools never clear repository-wide dirty
+state. The routine path is one complete action-free status scan after all edits
+for a task are done; `set_index_dirty(false)` is reserved for maintenance.
 
 ## `remove_index`
 

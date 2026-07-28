@@ -1,35 +1,44 @@
 # Repository guidance
 
-## Required Index-First Workflow
+## Index-First Context Gathering
 
-For every repository task that requires codebase context:
+The indexer gathers context; it is not a mandatory protocol. Use it when you do
+not already know where the relevant code lives, since file and line pointers
+cost far less than a repository-wide grep. When the paths are known, read them
+directly.
 
-1. Call `index_repo`.
-2. Call `get_index_status`.
-3. Reconcile the index:
-   - Use `reindex_file` for new or changed files.
-   - Use `delete_file_from_index` for deleted files and old rename paths.
-4. Verify the index is clean with `get_index_status`.
-5. Call `search_repo_context` with a concise feature, behavior, or symbol query.
-6. Read the returned source regions directly.
-7. Use targeted `rg`, grep, or glob searches to find definitions, callers, references, and tests.
+Always call `start_watcher` at the start or resume of an MCP process. It is
+idempotent and reports `already_running`. Starting or restarting marks the index
+dirty; a dirty bit does not by itself require a walk. `get_watcher_status` is
+for later turns and fails when no watcher owns the repository.
 
-Treat index results as navigation pointers. The current working tree remains the source of truth. Avoid broad scans and whole-file reads unless the indexed pointers are insufficient.
+Call `index_repo` only when no usable index exists. Do not use it to refresh or
+repair an existing index.
 
-After all edits, formatting, generation, or other file-changing commands:
+Using the index is a judgement call:
 
-1. Call `get_index_status`.
-2. Reindex changed files and remove deleted paths from the index.
-3. Call `get_index_status` again.
-4. Do not report completion until the index is clean. Report any unresolved indexing errors.
+- Search a dirty index with `search_repo_context(include_stale=true)`. Treat
+  results as file hints, read current files directly, and use targeted text
+  searches for shifted, deleted, renamed, or new files.
+- A dirty index does not block a targeted edit; the target file is read from
+  disk. Track every path changed by the agent.
 
-If an approved background watcher is active, it may perform routine synchronization, but the agent must still verify clean status before searching and before completion.
+Reconciling edits is not:
 
-Required flow:
+1. After the edit batch, reindex each created or modified indexable path once
+   and remove deleted, renamed-from, or newly unindexable paths.
+2. Run one `get_index_status` after all edits for the task are complete — not
+   after each edit or turn. Reconcile any reported actions and verify clean.
+3. Reconcile authoritatively before repository-wide completeness claims,
+   structural or bulk changes, watcher failure, index maintenance, or errors.
 
-index → verify/synchronize → search context → read pointers → targeted text search → make changes → verify/synchronize → complete
+`set_index_dirty` is a maintenance tool; the workflow above leaves clean and
+dirty state to `get_index_status`.
 
-If the indexer is unavailable or unusable, state that briefly and fall back to targeted rg, grep, glob, and direct source reads.
+Use `search_repo_context` when discovery is needed. Index results are navigation
+pointers; the working tree remains the source of truth. If the indexer is
+unavailable or unusable, state that briefly and fall back to targeted `rg`,
+grep, glob, and direct source reads.
 
 ## Working rules
 
@@ -47,8 +56,9 @@ If the indexer is unavailable or unusable, state that briefly and fall back to t
   in `index_store.py`.
 - Add focused, local tests for changed behavior and avoid network-dependent
   tests.
-- Do not expand the v0 scope with external embeddings, AST parsing, watchers,
-  background reindexing, or semantic code graphs unless explicitly requested.
+- Do not expand the current scope with external embeddings, AST parsing,
+  automatic background reindexing, or semantic code graphs unless explicitly
+  requested.
 
 ## Project overview
 
@@ -100,8 +110,8 @@ It is intentionally a learning-oriented v0, not a production-grade CocoIndex
 replacement.
 
 The index accelerates context discovery, but files on disk remain the source of
-truth. Explicit per-file updates keep indexing predictable and avoid the
-complexity of watchers or automatic background work.
+truth. Explicit per-file updates keep indexing predictable. The watcher is only
+a process-local change signal and never performs automatic background updates.
 
 ## Development and verification
 

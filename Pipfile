@@ -6,6 +6,7 @@ name = "pypi"
 [packages]
 chromadb = ">=1.5,<2"
 fastmcp = "*"
+watchfiles = ">=1.2,<2"
 
 [dev-packages]
 pytest = "*"

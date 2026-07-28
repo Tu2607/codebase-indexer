@@ -7,8 +7,16 @@ import pytest
 from fastmcp.exceptions import ToolError
 
 import codebase_indexer.server as server
+from codebase_indexer.dirty_flag import DIRTY
 from codebase_indexer.index_store import IndexCorruptedError, IndexNotInitializedError
 from codebase_indexer.searcher import SearchMetadataError
+
+
+@pytest.fixture(autouse=True)
+def reset_dirty_flag():
+    DIRTY.check_and_clear()
+    yield
+    DIRTY.check_and_clear()
 
 
 def _patch_open_store(monkeypatch, store):
@@ -442,12 +450,22 @@ def test_get_index_status_wires_store_and_orchestrator(monkeypatch, tmp_path):
     store = Mock()
     store.repo_path = tmp_path.resolve()
     open_existing = _patch_open_store(monkeypatch, store)
-    orchestrator = Mock(return_value={"status": "clean"})
+    orchestrator = Mock(
+        return_value={
+            "status": "clean",
+            "files_to_reindex": [],
+            "files_to_delete": [],
+            "files_with_errors": [],
+            "watcher_running": False,
+            "dirty": False,
+        }
+    )
     monkeypatch.setattr(server, "get_repository_index_status", orchestrator)
+    monkeypatch.setattr(server, "is_watcher_running", Mock(return_value=False))
 
     result = server.get_index_status(str(tmp_path))
 
-    assert result == {"status": "clean"}
+    assert result == orchestrator.return_value
     open_existing.assert_called_once_with(tmp_path.resolve())
     orchestrator.assert_called_once_with(store, tmp_path.resolve())
     store.close.assert_called_once_with()
@@ -491,7 +509,266 @@ def test_get_index_status_does_not_swallow_unexpected_errors(monkeypatch, tmp_pa
     with pytest.raises(RuntimeError, match="status failed"):
         server.get_index_status(str(tmp_path))
 
+    assert DIRTY.is_set() is True
     store.close.assert_called_once_with()
+
+
+def test_start_watcher_validates_and_delegates(monkeypatch, tmp_path):
+    start = Mock(
+        return_value={
+            "status": "started",
+            "repo_path": str(tmp_path.resolve()),
+            "watcher_running": True,
+            "dirty": True,
+        }
+    )
+    monkeypatch.setattr(server, "start_background_watcher", start)
+
+    result = server.start_watcher(f" {tmp_path} ")
+
+    assert result == start.return_value
+    start.assert_called_once_with(tmp_path.resolve())
+
+
+def test_start_watcher_converts_expected_errors(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        server,
+        "start_background_watcher",
+        Mock(side_effect=RuntimeError("watcher failed")),
+    )
+
+    with pytest.raises(ToolError, match="watcher failed"):
+        server.start_watcher(str(tmp_path))
+
+
+def test_get_watcher_status_is_a_cheap_non_indexed_check(monkeypatch, tmp_path):
+    status = Mock(
+        return_value={
+            "repo_path": str(tmp_path.resolve()),
+            "watcher_running": True,
+            "dirty": False,
+        }
+    )
+    monkeypatch.setattr(server, "get_background_watcher_status", status)
+    monkeypatch.setattr(
+        server.IndexStore,
+        "open_existing",
+        Mock(side_effect=AssertionError("index must not be opened")),
+    )
+
+    result = server.get_watcher_status(str(tmp_path))
+
+    assert result == status.return_value
+    status.assert_called_once_with(tmp_path.resolve())
+
+
+def test_get_watcher_status_converts_repository_mismatch(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        server,
+        "get_background_watcher_status",
+        Mock(side_effect=ValueError("different repository")),
+    )
+
+    with pytest.raises(ToolError, match="different repository"):
+        server.get_watcher_status(str(tmp_path))
+
+
+def test_set_index_dirty_is_a_cheap_validated_update(monkeypatch, tmp_path):
+    status = Mock(
+        return_value={
+            "repo_path": str(tmp_path.resolve()),
+            "watcher_running": True,
+            "dirty": True,
+        }
+    )
+    monkeypatch.setattr(server, "get_background_watcher_status", status)
+    monkeypatch.setattr(
+        server.IndexStore,
+        "open_existing",
+        Mock(side_effect=AssertionError("index must not be opened")),
+    )
+    DIRTY.set()
+
+    result = server.set_index_dirty(str(tmp_path), False)
+
+    assert result == {
+        "repo_path": str(tmp_path.resolve()),
+        "watcher_running": True,
+        "dirty": False,
+    }
+    assert DIRTY.is_set() is False
+    status.assert_called_once_with(tmp_path.resolve())
+
+
+def test_set_index_dirty_does_not_mutate_on_repository_mismatch(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        server,
+        "get_background_watcher_status",
+        Mock(side_effect=ValueError("different repository")),
+    )
+    DIRTY.set()
+
+    with pytest.raises(ToolError, match="different repository"):
+        server.set_index_dirty(str(tmp_path), False)
+
+    assert DIRTY.is_set() is True
+
+
+def test_set_index_dirty_rejects_clear_without_running_watcher(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        server,
+        "get_background_watcher_status",
+        Mock(
+            return_value={
+                "repo_path": str(tmp_path.resolve()),
+                "watcher_running": False,
+                "dirty": True,
+            }
+        ),
+    )
+    DIRTY.set()
+
+    with pytest.raises(ToolError, match="without a running watcher"):
+        server.set_index_dirty(str(tmp_path), False)
+
+    assert DIRTY.is_set() is True
+
+
+def test_set_index_dirty_can_mark_uncertainty_without_running_watcher(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        server,
+        "get_background_watcher_status",
+        Mock(
+            return_value={
+                "repo_path": str(tmp_path.resolve()),
+                "watcher_running": False,
+                "dirty": False,
+            }
+        ),
+    )
+
+    result = server.set_index_dirty(str(tmp_path), True)
+
+    assert result["watcher_running"] is False
+    assert result["dirty"] is True
+    assert DIRTY.is_set() is True
+
+
+def test_set_index_dirty_returns_actual_post_set_state(monkeypatch, tmp_path):
+    class ConcurrentDirtyFlag:
+        def set(self, value=True):
+            pass
+
+        def is_set(self):
+            return True
+
+    monkeypatch.setattr(
+        server,
+        "get_background_watcher_status",
+        Mock(
+            return_value={
+                "repo_path": str(tmp_path.resolve()),
+                "watcher_running": True,
+                "dirty": True,
+            }
+        ),
+    )
+    monkeypatch.setattr(server, "DIRTY", ConcurrentDirtyFlag())
+
+    result = server.set_index_dirty(str(tmp_path), False)
+
+    assert result["dirty"] is True
+
+
+def test_get_index_status_keeps_dirty_for_pending_actions(monkeypatch, tmp_path):
+    store = Mock()
+    store.repo_path = tmp_path.resolve()
+    _patch_open_store(monkeypatch, store)
+    monkeypatch.setattr(
+        server,
+        "get_repository_index_status",
+        Mock(
+            return_value={
+                "status": "changes_detected",
+                "files_to_reindex": [
+                    {"relative_path": "module.py", "reason": "content_changed"}
+                ],
+                "files_to_delete": [],
+                "files_with_errors": [],
+                "watcher_running": False,
+                "dirty": False,
+            }
+        ),
+    )
+    monkeypatch.setattr(server, "is_watcher_running", Mock(return_value=True))
+
+    result = server.get_index_status(str(tmp_path))
+
+    assert result["dirty"] is True
+    assert result["watcher_running"] is True
+
+
+def test_get_index_status_keeps_dirty_for_scan_errors(monkeypatch, tmp_path):
+    store = Mock()
+    store.repo_path = tmp_path.resolve()
+    _patch_open_store(monkeypatch, store)
+    monkeypatch.setattr(
+        server,
+        "get_repository_index_status",
+        Mock(
+            return_value={
+                "status": "changes_detected",
+                "files_to_reindex": [],
+                "files_to_delete": [],
+                "files_with_errors": [
+                    {"relative_path": "module.py", "reason": "permission denied"}
+                ],
+                "watcher_running": False,
+                "dirty": False,
+            }
+        ),
+    )
+    monkeypatch.setattr(server, "is_watcher_running", Mock(return_value=True))
+
+    result = server.get_index_status(str(tmp_path))
+
+    assert result["dirty"] is True
+
+
+def test_get_index_status_preserves_event_received_during_scan(
+    monkeypatch,
+    tmp_path,
+):
+    store = Mock()
+    store.repo_path = tmp_path.resolve()
+    _patch_open_store(monkeypatch, store)
+
+    def scan(*args):
+        DIRTY.set()
+        return {
+            "status": "clean",
+            "files_to_reindex": [],
+            "files_to_delete": [],
+            "files_with_errors": [],
+            "watcher_running": False,
+            "dirty": False,
+        }
+
+    monkeypatch.setattr(server, "get_repository_index_status", scan)
+    monkeypatch.setattr(server, "is_watcher_running", Mock(return_value=True))
+
+    result = server.get_index_status(str(tmp_path))
+
+    assert result["dirty"] is True
 
 
 def test_remove_index_requires_confirmation_before_validation(monkeypatch):
@@ -664,6 +941,63 @@ def test_fastmcp_dispatches_get_index_status_without_mutation(tmp_path):
     assert store.collection_count() == 0
 
 
+def test_fastmcp_dispatches_get_watcher_status(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        server,
+        "get_background_watcher_status",
+        Mock(
+            return_value={
+                "repo_path": str(tmp_path.resolve()),
+                "watcher_running": True,
+                "dirty": False,
+            }
+        ),
+    )
+
+    result = asyncio.run(
+        server.mcp.call_tool(
+            "get_watcher_status",
+            {"repo_path": str(tmp_path)},
+        )
+    )
+
+    assert result.is_error is False
+    assert json.loads(result.content[0].text) == {
+        "repo_path": str(tmp_path.resolve()),
+        "watcher_running": True,
+        "dirty": False,
+    }
+
+
+def test_fastmcp_dispatches_set_index_dirty(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        server,
+        "get_background_watcher_status",
+        Mock(
+            return_value={
+                "repo_path": str(tmp_path.resolve()),
+                "watcher_running": True,
+                "dirty": True,
+            }
+        ),
+    )
+    DIRTY.set()
+
+    result = asyncio.run(
+        server.mcp.call_tool(
+            "set_index_dirty",
+            {"repo_path": str(tmp_path), "dirty": False},
+        )
+    )
+
+    assert result.is_error is False
+    assert json.loads(result.content[0].text) == {
+        "repo_path": str(tmp_path.resolve()),
+        "watcher_running": True,
+        "dirty": False,
+    }
+
+
 def test_fastmcp_remove_then_index_repo_recreates_fresh_index(tmp_path):
     from codebase_indexer.index_store import IndexStore
 
@@ -818,6 +1152,14 @@ def test_search_repo_context_propagates_unexpected_error_and_closes_store(
 
 
 def test_server_tool_signatures_use_explicit_repo_path():
+    assert list(inspect.signature(server.start_watcher).parameters) == ["repo_path"]
+    assert list(inspect.signature(server.get_watcher_status).parameters) == [
+        "repo_path"
+    ]
+    assert list(inspect.signature(server.set_index_dirty).parameters) == [
+        "repo_path",
+        "dirty",
+    ]
     assert list(inspect.signature(server.index_repo).parameters) == ["repo_path"]
     assert inspect.signature(server.reindex_file).parameters.keys() >= {
         "repo_path",

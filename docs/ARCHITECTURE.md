@@ -15,7 +15,7 @@ The index accelerates discovery; files on disk remain authoritative.
 MCP client
     |
     v
-server.py (tool definitions and error translation)
+server.py (tool definitions, dirty lifecycle, and error translation)
     |
     +--> indexer.py / reindexer.py / searcher.py (workflows)
     |        |
@@ -23,6 +23,10 @@ server.py (tool definitions and error translation)
     |        +--> hashing.py
     |        +--> chunker.py
     |        +--> index_store.py --> ChromaDB
+    |
+    +--> watcher.py --> watchfiles worker thread
+    |        +--> dirty_flag.py
+    |        +--> file_finder.py
     |
     +--> results.py (structured return contracts)
 ```
@@ -44,6 +48,8 @@ src/codebase_indexer/
   results.py
   path_utils.py
   repo_id.py
+  dirty_flag.py
+  watcher.py
 ```
 
 ## Module boundaries
@@ -53,7 +59,8 @@ src/codebase_indexer/
   collection name.
 - `hashing.py` computes SHA-256 hashes from raw file bytes.
 - `file_finder.py` decides whether a file is indexable and walks a repository,
-  returning canonical eligible files and a discovery skip count.
+  returning canonical eligible files and a discovery skip count. Its lexical
+  predicate also handles watcher paths that may no longer exist.
 - `chunker.py` performs overlapping line-based chunking.
 - `index_store.py` contains ChromaDB client and collection access, chunk writes
   and deletion, queries, and index metadata/status operations.
@@ -63,8 +70,12 @@ src/codebase_indexer/
 - `searcher.py` validates nearest-match metadata, checks staleness, and returns
   ordered source-location pointers without mutating the index.
 - `results.py` defines structured dictionary contracts and constructors.
-- `path_utils.py` validates and normalizes repository and file paths.
+- `path_utils.py` validates and normalizes repository, file, and watcher event
+  paths, including repository-boundary and skipped-directory checks.
 - `repo_id.py` provides stable repository identity used by stored records.
+- `dirty_flag.py` owns the thread-safe process-local dirty signal.
+- `watcher.py` owns the single-repository `watchfiles` worker, event
+  classification, and lifecycle.
 - `server.py` owns FastMCP tool definitions and translates domain failures into
   MCP-facing errors.
 
@@ -152,6 +163,21 @@ The intended update lifecycle is inspect, then mutate: `get_index_status`
 reports paths requiring reindex or deletion without changing the index, and the
 caller invokes the corresponding single-file tool for each path.
 
+The process-local watcher avoids unnecessary status walks. `start_watcher`
+marks a fresh worker dirty so one complete baseline scan is required. Later
+filesystem changes only set the dirty bit. A dirty index does not by itself
+block read-only work or a targeted edit: the agent reindexes the paths it
+changed and defers a single authoritative `get_index_status` until all edits
+for the task are complete. Unknown dirty state, indexing failures, and
+important structural changes retain authoritative `get_index_status`
+reconciliation. `set_index_dirty` remains available for maintenance, but the
+routine workflow leaves the dirty bit to `get_index_status`.
+
+The watcher runs synchronous `watchfiles.watch` in one daemon Python thread and
+uses a `threading.Event` for cleanup. It filters skipped trees and shares the
+configured path allowlist with discovery. It never opens ChromaDB, queues paths,
+or performs index mutation. One MCP process watches at most one repository.
+
 Status derives a file-level view by grouping chunk metadata by relative path
 and stored file hash, then compares it with the current eligible repository
 walk. Missing and no-longer-indexable indexed paths are deletion candidates;
@@ -202,7 +228,7 @@ concurrent-operation support.
 - OpenAI API or other external embedding services.
 - AST parsing or Tree-sitter.
 - LLM-generated summaries.
-- File watchers, schedulers, or background daemons.
+- Automatic background reindexing or deletion.
 - Background reindexing during search.
 - Symbol graphs, call graphs, or deeper semantic indexing.
 - Generalized support for every programming language.

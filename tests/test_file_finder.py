@@ -4,7 +4,25 @@ import pytest
 
 import codebase_indexer.file_finder as file_finder
 from codebase_indexer.config import MAX_FILE_SIZE_BYTES
-from codebase_indexer.file_finder import iter_indexable_files, should_index_file
+from codebase_indexer.file_finder import (
+    is_index_candidate_path,
+    iter_indexable_files,
+    should_index_file,
+)
+
+
+def test_index_candidate_path_uses_config_without_filesystem_access(tmp_path):
+    assert is_index_candidate_path(tmp_path / "missing.py", tmp_path)
+    assert is_index_candidate_path(tmp_path / "Dockerfile", tmp_path)
+    assert not is_index_candidate_path(tmp_path / "image.png", tmp_path)
+    assert not is_index_candidate_path(
+        tmp_path / "node_modules" / "missing.py", tmp_path
+    )
+
+
+def test_index_candidate_path_rejects_path_outside_repository(tmp_path):
+    with pytest.raises(ValueError, match="is not in the subpath"):
+        is_index_candidate_path(tmp_path.parent / "outside.py", tmp_path)
 
 
 def test_should_index_regular_file(tmp_path):
@@ -263,4 +281,8 @@ def test_iter_indexable_files_handles_empty_repository(tmp_path):
 
 
 def test_file_finder_public_surface():
-    assert file_finder.__all__ == ["iter_indexable_files", "should_index_file"]
+    assert file_finder.__all__ == [
+        "is_index_candidate_path",
+        "iter_indexable_files",
+        "should_index_file",
+    ]

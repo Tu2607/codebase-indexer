@@ -20,6 +20,8 @@ __all__ = [
     "ReindexResult",
     "RemovedIndexResult",
     "SearchMatch",
+    "WatcherState",
+    "WatcherStatus",
     "deleted_result",
     "file_not_found_result",
     "hash_failed_result",
@@ -30,6 +32,8 @@ __all__ = [
     "reindexed_result",
     "removed_index_result",
     "search_match_result",
+    "watcher_state_result",
+    "watcher_status_result",
 ]
 
 
@@ -79,6 +83,18 @@ class IndexStatusResult(TypedDict):
     files_to_reindex: list[IndexStatusAction]
     files_to_delete: list[IndexStatusAction]
     files_with_errors: list[IndexStatusError]
+    watcher_running: bool
+    dirty: bool
+
+
+class WatcherStatus(TypedDict):
+    repo_path: str
+    watcher_running: bool
+    dirty: bool
+
+
+class WatcherState(WatcherStatus):
+    status: Literal["started", "already_running"]
 
 
 class ReindexedResult(TypedDict):
@@ -188,6 +204,9 @@ def index_status_result(
     files_to_reindex: list[IndexStatusAction],
     files_to_delete: list[IndexStatusAction],
     files_with_errors: list[IndexStatusError],
+    *,
+    watcher_running: bool = False,
+    dirty: bool = False,
 ) -> IndexStatusResult:
     has_changes = bool(files_to_reindex or files_to_delete or files_with_errors)
     return {
@@ -200,6 +219,38 @@ def index_status_result(
         "files_to_reindex": files_to_reindex,
         "files_to_delete": files_to_delete,
         "files_with_errors": files_with_errors,
+        "watcher_running": watcher_running,
+        "dirty": dirty,
+    }
+
+
+def watcher_status_result(
+    repo_path: str,
+    *,
+    watcher_running: bool,
+    dirty: bool,
+) -> WatcherStatus:
+    return {
+        "repo_path": repo_path,
+        "watcher_running": watcher_running,
+        "dirty": dirty,
+    }
+
+
+def watcher_state_result(
+    status: Literal["started", "already_running"],
+    repo_path: str,
+    *,
+    watcher_running: bool,
+    dirty: bool,
+) -> WatcherState:
+    return {
+        "status": status,
+        **watcher_status_result(
+            repo_path,
+            watcher_running=watcher_running,
+            dirty=dirty,
+        ),
     }
 
 
